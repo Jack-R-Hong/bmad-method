@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  release:
+    name: Cross-compile and Publish
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Add Rust targets
+        run: |
+          rustup target add x86_64-unknown-linux-gnu
+          rustup target add aarch64-unknown-linux-gnu
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
+
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        run: |
+          curl -L https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.22.1/cargo-zigbuild-x86_64-unknown-linux-musl.tar.xz | tar xJ
+          sudo mv cargo-zigbuild /usr/local/bin/
+
+      - name: Run bmad-converter
+        run: cargo run --locked -p bmad-converter -- --input agents/ --output crates/bmad-plugin/src/generated/
+
+      - name: Cross-compile all targets
+        run: |
+          cargo zigbuild --locked -p bmad-plugin --release --target x86_64-unknown-linux-gnu
+          cargo zigbuild --locked -p bmad-plugin --release --target aarch64-unknown-linux-gnu
+          cargo zigbuild --locked -p bmad-plugin --release --target x86_64-apple-darwin
+          cargo zigbuild --locked -p bmad-plugin --release --target aarch64-apple-darwin
+
+      - name: Package linux-x86_64
+        run: |
+          PLUGIN_VERSION="${GITHUB_REF_NAME#v}" \
+          BINARY_PATH="target/x86_64-unknown-linux-gnu/release/libbmad_plugin.so" \
+          PLATFORM="linux-x86_64" \
+          ./scripts/package.sh
+
+      - name: Package linux-aarch64
+        run: |
+          PLUGIN_VERSION="${GITHUB_REF_NAME#v}" \
+          BINARY_PATH="target/aarch64-unknown-linux-gnu/release/libbmad_plugin.so" \
+          PLATFORM="linux-aarch64" \
+          ./scripts/package.sh
+
+      - name: Package darwin-x86_64
+        run: |
+          PLUGIN_VERSION="${GITHUB_REF_NAME#v}" \
+          BINARY_PATH="target/x86_64-apple-darwin/release/libbmad_plugin.dylib" \
+          PLATFORM="darwin-x86_64" \
+          ./scripts/package.sh
+
+      - name: Package darwin-aarch64
+        run: |
+          PLUGIN_VERSION="${GITHUB_REF_NAME#v}" \
+          BINARY_PATH="target/aarch64-apple-darwin/release/libbmad_plugin.dylib" \
+          PLATFORM="darwin-aarch64" \
+          ./scripts/package.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

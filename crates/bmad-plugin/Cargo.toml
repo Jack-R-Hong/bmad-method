@@ -1,0 +1,24 @@
+[package]
+name = "bmad-plugin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "bmad_plugin"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "print_api_version"
+path = "src/bin/print_api_version.rs"
+
+[[bin]]
+name = "print_agent_count"
+path = "src/bin/print_agent_count.rs"
+
+[features]
+pulse-api = []
+
+[dependencies]
+bmad-types = { path = "../bmad-types" }
+thiserror = { workspace = true }

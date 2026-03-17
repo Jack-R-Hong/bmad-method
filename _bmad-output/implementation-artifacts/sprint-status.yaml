@@ -1,0 +1,79 @@
+# generated: 2026-03-17
+# last_updated: 2026-03-17 (4-6 done, epic-4 done)
+# project: bmad-method
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: "{project-root}/_bmad-output/implementation-artifacts"
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-03-17
+last_updated: 2026-03-17 (4-6 done, epic-4 done)
+project: bmad-method
+project_key: NOKEY
+tracking_system: file-system
+story_location: "{project-root}/_bmad-output/implementation-artifacts"
+
+development_status:
+  # Epic 1: Build Pipeline - From BMAD Definitions to Working Plugin
+  epic-1: done
+  1-1-initialize-cargo-workspace-structure: done
+  1-2-define-shared-types-in-bmad-types: done
+  1-3-implement-bmad-frontmatter-parser: done
+  1-4-implement-rust-code-generator: done
+  1-5-plugin-shell-registration-api-compliance: done
+  1-6-end-to-end-build-pipeline-integration: done
+  epic-1-retrospective: optional
+
+  # Epic 2: Agent Execution - BMAD Agents Deliver Value in Workflows
+  epic-2: done
+  2-1-taskexecutor-integration-agent-routing: done
+  2-2-input-handling-agentoutput-construction: done
+  2-3-core-agent-definition-files: done
+  2-4-remaining-agent-definition-files: done
+  2-5-multi-agent-dag-workflow-compatibility: done
+  epic-2-retrospective: optional
+
+  # Epic 3: Discovery & Metadata - Users Understand What's Available
+  epic-3: done
+  3-1-bmad-frontmatter-schema-pulse-api-contract: done
+  3-2-agent-metadata-embedding-registry-queries: done
+  3-3-agent-reference-documentation: done
+  epic-3-retrospective: optional
+
+  # Epic 4: Distribution & Lifecycle - Package, Install, Manage
+  epic-4: done
+  4-1-distribution-packaging-script: done
+  4-2-cross-platform-ci-cd-build-pipeline: done
+  4-3-cli-plugin-installation: done
+  4-4-manual-installation: done
+  4-5-plugin-verification-metadata-display: done
+  4-6-plugin-uninstall-and-update: done
+  epic-4-retrospective: optional

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Run bmad-converter
+        run: cargo run --locked -p bmad-converter -- --input agents/ --output crates/bmad-plugin/src/generated/
+
+      - name: Build bmad-plugin
+        run: cargo build --locked -p bmad-plugin
+
+      - name: Run tests
+        run: cargo test --locked --workspace
+
+      - name: Run clippy
+        run: cargo clippy --locked --workspace -- -D warnings

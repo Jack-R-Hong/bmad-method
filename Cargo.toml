@@ -1,0 +1,57 @@
+[workspace]
+members = [
+    "crates/bmad-types",
+    "crates/bmad-converter",
+    "crates/bmad-plugin",
+]
+resolver = "2"
+
+[package]
+name = "bmad-method"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }
+bmad-converter = { path = "crates/bmad-converter" }
+bmad-plugin = { path = "crates/bmad-plugin" }
+bmad-types = { path = "crates/bmad-types" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+authors = ["BMAD-METHOD Contributors"]
+license = "MIT"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Frontmatter parsing
+yaml-front-matter = "0.1"
+
+# Code generation (converter only)
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# CLI (converter only)
+clap = { version = "4.0", features = ["derive"] }
+
+# Plugin API (plugin only — provided by Pulse)
+# pulse-api = { version = "0.1" }  # Uncomment when crate is available
+
+# Dynamic loading (integration tests)
+libloading = "0.8"
+
+# Date/time (converter only)
+chrono = { version = "0.4", features = ["std"] }
+
+# Test utilities
+tempfile = "3.0"

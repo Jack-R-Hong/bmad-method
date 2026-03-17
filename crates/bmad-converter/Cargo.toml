@@ -1,0 +1,27 @@
+[package]
+name = "bmad-converter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "bmad_converter_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bmad-converter"
+path = "src/main.rs"
+
+[dependencies]
+bmad-types = { path = "../bmad-types" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+yaml-front-matter = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

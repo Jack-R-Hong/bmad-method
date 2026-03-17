@@ -1,0 +1,6 @@
+/target
+/dist
+crates/bmad-plugin/src/generated/
+.DS_Store
+*.swp
+*.swo
