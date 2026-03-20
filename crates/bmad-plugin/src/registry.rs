@@ -401,7 +401,7 @@ mod tests {
         });
         let bmad_input: crate::executor::BmadInput =
             serde_json::from_value(input_json).expect("health check JSON must be valid BmadInput");
-        assert_eq!(bmad_input.agent, "bmad/architect");
+        assert_eq!(bmad_input.agent.as_deref(), Some("bmad/architect"));
         assert_eq!(bmad_input.prompt.as_deref(), Some("health-check"));
     }
 

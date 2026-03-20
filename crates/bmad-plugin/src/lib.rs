@@ -68,7 +68,16 @@ impl StepExecutorPlugin for BmadMethodPlugin {
         let bmad_input: BmadInput = serde_json::from_value(input_val.clone())
             .map_err(|e| WitPluginError::invalid_input(format!("invalid BMAD input JSON: {e}")))?;
 
-        let normalized = bmad_input.normalized_agent();
+        let normalized = bmad_input.normalized_agent().ok_or_else(|| {
+            let available: Vec<&str> = generated::all_agents()
+                .iter()
+                .map(|a| a.executor_name)
+                .collect();
+            WitPluginError::not_found(format!(
+                "No agent specified. Available: [{}]",
+                available.join(", ")
+            ))
+        })?;
         let entries = generated::all_agent_entries();
         let (meta, prompt, params, suggested_cfg) = entries
             .into_iter()

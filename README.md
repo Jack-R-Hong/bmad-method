@@ -37,7 +37,7 @@ Installs the latest version. After installation, all `bmad/` executors are avail
 Expected output:
 ```
 ✓ bmad-method v{version} installed
-✓ 12 agents available: architect, dev, pm, qa, ux-designer, sm...
+✓ 12 agents available: architect, dev, pm, qa, ux-designer, sm, quick-flow-solo-dev...
 ```
 
 #### Verifying Your Installation
@@ -236,10 +236,10 @@ using the exact executor name shown below. Executor names are case-sensitive.
 | John the PM | `bmad/pm` | Requirements-focused product manager who relentlessly asks WHY and validates user value |
 | Quinn the QA Engineer | `bmad/qa` | Practical, test-focused QA engineer with "ship it and iterate" philosophy |
 | Maya the UX Designer | `bmad/ux-designer` | Design-focused UX designer specializing in user research, interaction design, and usability analysis |
-| Sam the Scrum Master | `bmad/sm` | Agile facilitator specializing in sprint ceremonies, impediment removal, and team coaching |
+| Bob the Scrum Master | `bmad/sm` | Agile facilitator specializing in sprint ceremonies, impediment removal, and team coaching |
 | Alex the Business Analyst | `bmad/analyst` | Business analyst specializing in requirements elicitation, domain modeling, and process analysis |
 | Taylor the Tech Writer | `bmad/tech-writer` | Technical writer specializing in developer documentation, API references, and user guides |
-| Quick Flow Coordinator | `bmad/quick-flow` | Efficient workflow coordinator for rapid task execution and multi-agent orchestration |
+| Barry the Quick Dev | `bmad/quick-flow-solo-dev` | Fast-moving solo developer who creates lean specs and implements small features end-to-end |
 | BMad Master | `bmad/bmad-master` | Meta-agent with holistic BMAD-METHOD knowledge for complex multi-domain orchestration |
 | Sage the Security Reviewer | `bmad/security` | Security engineer specializing in threat modeling, code review, and security architecture |
 | Devon the DevOps Engineer | `bmad/devops` | DevOps engineer specializing in CI/CD pipelines, infrastructure as code, and deployment automation |
@@ -368,11 +368,11 @@ workflow:
 
 ---
 
-### bmad/sm — Sam the Scrum Master
+### bmad/sm — Bob the Scrum Master
 
 **Specialization:** Agile facilitator specializing in sprint ceremonies, impediment removal, and team coaching.
 
-Sam is an experienced Scrum Master and agile coach. A servant leader — his job is to remove
+Bob is an experienced Scrum Master and agile coach. A servant leader — his job is to remove
 obstacles, facilitate alignment, and protect the team's focus through agile ceremonies and
 coaching.
 
@@ -440,26 +440,26 @@ workflow:
 
 ---
 
-### bmad/quick-flow — Quick Flow Coordinator
+### bmad/quick-flow-solo-dev — Barry the Quick Dev
 
-**Specialization:** Efficient workflow coordinator for rapid task execution and multi-agent orchestration.
+**Specialization:** Fast-moving solo developer who creates lean specs and implements small features end-to-end.
 
-The Quick Flow Coordinator decomposes complex tasks into parallel workstreams, identifies
-dependencies, and optimizes for the fastest path to a working outcome — good enough now beats
-perfect specification.
+Barry excels at turning vague requirements into working code with minimal overhead. He creates
+lean specs just detailed enough to guide implementation, then builds the solution himself.
+No bureaucracy, no over-engineering — just working code, shipped fast.
 
-**Capabilities:** `task-decomposition`, `workflow-design`, `parallel-execution-planning`, `dependency-analysis`, `rapid-prototyping`, `multi-agent-coordination`
+**Capabilities:** `lean-spec-creation`, `rapid-implementation`, `quick-prototyping`, `small-feature-development`, `fast-iteration`, `minimal-viable-solution`
 
 **Minimal workflow YAML:**
 ```yaml
 workflow:
-  name: rapid-prototype
+  name: quick-dev
   steps:
-    - name: coordinate
-      executor: bmad/quick-flow
+    - name: spec-and-build
+      executor: bmad/quick-flow-solo-dev
       input: |
-        Break down and coordinate execution of:
-        {{ context.goal }}
+        Quick spec and implement:
+        {{ context.requirement }}
 ```
 
 ---

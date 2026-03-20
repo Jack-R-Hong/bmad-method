@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BmadInput {
     /// Agent name, e.g. "bmad/architect" or "architect".
     /// When called from Pulse workflow, this is extracted from `system_prompt` if not set directly.
@@ -26,15 +27,16 @@ pub struct BmadInput {
 impl BmadInput {
     /// Returns the agent name normalized with the `bmad/` prefix.
     /// Resolves agent from: explicit `agent` field, or `system_prompt` pattern "bmad/<name>".
-    pub fn normalized_agent(&self) -> String {
+    /// Returns None if no agent can be resolved.
+    pub fn normalized_agent(&self) -> Option<String> {
         // Try explicit agent field first
         if let Some(ref agent) = self.agent {
             if !agent.is_empty() {
-                return if agent.starts_with("bmad/") {
+                return Some(if agent.starts_with("bmad/") {
                     agent.clone()
                 } else {
                     format!("bmad/{}", agent)
-                };
+                });
             }
         }
         // Extract from system_prompt: look for "bmad/<name>" pattern
@@ -43,12 +45,11 @@ impl BmadInput {
                 let after = &prompt[idx + 5..];
                 let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
                 if !name.is_empty() {
-                    return format!("bmad/{}", name);
+                    return Some(format!("bmad/{}", name));
                 }
             }
         }
-        // Fallback
-        "bmad/architect".to_string()
+        None
     }
 
     /// Resolve the user prompt from available fields.
@@ -574,11 +575,11 @@ mod tests {
     }
 
     #[test]
-    fn quick_flow_system_prompt_contains_persona_keywords() {
-        let prompt = generated::quick_flow::SYSTEM_PROMPT.to_lowercase();
+    fn quick_flow_solo_dev_system_prompt_contains_persona_keywords() {
+        let prompt = generated::quick_flow_solo_dev::SYSTEM_PROMPT.to_lowercase();
         assert!(
-            prompt.contains("quick") || prompt.contains("lean") || prompt.contains("spec") || prompt.contains("rapid"),
-            "QuickFlow SYSTEM_PROMPT must contain relevant keywords"
+            prompt.contains("quick") || prompt.contains("lean") || prompt.contains("spec") || prompt.contains("barry"),
+            "QuickFlowSoloDev SYSTEM_PROMPT must contain relevant keywords"
         );
     }
 
