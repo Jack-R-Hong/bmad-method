@@ -1,0 +1,130 @@
+# Story 5.3: Consolidate or Differentiate AgentMetadata.id and .name
+
+Status: ready-for-dev
+
+## Story
+
+As a plugin maintainer,
+I want to remove the redundant `id` field from AgentMetadata since it always has the same value as `name`,
+so that the data model is honest about what it represents and there is no false promise of distinct semantics.
+
+## Acceptance Criteria
+
+**Given** the current `AgentMetadata` struct has both `id` and `name` fields with identical values for all 12 agents
+**When** the `id` field is removed
+**Then** `AgentMetadata` has: `name`, `display_name`, `description`, `executor_name`, `capabilities` (5 fields, not 6)
+
+**Given** the converter generates agent Rust files
+**When** `cargo run -p bmad-converter` is executed
+**Then** the generated code uses the updated `AgentMetadata` struct without an `id` field
+
+**Given** any code previously referenced `agent.id` or `meta.id`
+**When** the build is run
+**Then** all references are updated to use `agent.name` and the build succeeds with zero warnings
+
+**Given** all changes are complete
+**When** `cargo test --workspace` is run
+**Then** all tests pass with zero dead code or unused field warnings
+
+## Tasks / Subtasks
+
+- [ ] **Task 1: Remove `id` field from AgentMetadata struct** (AC: #1)
+  - [ ] In `crates/bmad-types/src/metadata.rs`, remove line 8: `pub id: &'static str,`
+  - [ ] Remove the doc comment for `id` on line 7: `/// Internal identifier, lowercase hyphen-separated (e.g., "architect")`
+  - [ ] Update the test `agent_metadata_construction` to remove `id: "architect"` from the test struct literal (line 28)
+  - [ ] Remove the assertion `assert_eq!(meta.id, "architect");` (line 35)
+
+- [ ] **Task 2: Update converter template to stop generating `id` field** (AC: #2)
+  - [ ] In `crates/bmad-converter/src/codegen/templates.rs`, remove the `id: {id},\n\` line from the `static_block` format string (line 73)
+  - [ ] Remove `id = id_lit,` from the format arguments (line 81)
+  - [ ] Remove `let id_lit = raw_str_literal(&agent.name);` (line 65) — unless `name_lit` on line 66 serves the same purpose (both use `agent.name`), in which case just remove the `id_lit` variable
+  - [ ] Update the test assertion on line 253 that checks `result.contains("id: r")` — remove or replace with a check that `id` is NOT present
+
+- [ ] **Task 3: Regenerate all agent files** (AC: #2)
+  - [ ] Run `cargo run -p bmad-converter` to regenerate all 12 files in `crates/bmad-plugin/src/generated/`
+  - [ ] Verify each generated file no longer has an `id:` field in the `AgentMetadata` static block
+  - [ ] Files to check: `architect.rs`, `developer.rs`, `pm.rs`, `qa.rs`, `analyst.rs`, `bmad_master.rs`, `devops.rs`, `quick_flow.rs`, `scrum_master.rs`, `security.rs`, `tech_writer.rs`, `ux_designer.rs`
+
+- [ ] **Task 4: Update all code referencing `.id`** (AC: #3)
+  - [ ] Search workspace for `\.id\b` on AgentMetadata — check `registry.rs`, `executor.rs`, `lib.rs`, and test files
+  - [ ] The test `agent_metadata_construction` in `crates/bmad-types/src/metadata.rs` references `meta.id` — update in Task 1
+  - [ ] The `TEST_META` static in `crates/bmad-plugin/src/executor.rs:140-147` has `id: "test-agent"` — remove this field
+  - [ ] Search for any `.id` usage in bmad-converter tests
+
+- [ ] **Task 5: Verify clean build** (AC: #3, #4)
+  - [ ] Run `cargo build --workspace` — zero warnings
+  - [ ] Run `cargo test --workspace` — all tests pass
+  - [ ] Run `cargo clippy --workspace` — no new lints
+
+## Dev Notes
+
+### Architecture Context
+
+All 12 generated agents currently have identical `id` and `name` values. For example in `crates/bmad-plugin/src/generated/architect.rs`:
+```rust
+pub static ARCHITECT: AgentMetadata = AgentMetadata {
+    id: r#"architect"#,
+    name: r#"architect"#,
+    // ...
+};
+```
+
+The `id` field is never used independently of `name` anywhere in the codebase. The `executor_name` field (e.g., `"bmad/architect"`) serves as the true unique identifier for routing. The `name` field (e.g., `"architect"`) serves as the programmatic short name. Having `id` as a third redundant identifier is confusing.
+
+Decision: **Remove `id`, keep `name`** as the simpler option. The `name` field doc comment already says "Short programmatic name" which is the correct semantic.
+
+### Converter Code Path
+
+The converter generates agent files from markdown frontmatter. The template in `crates/bmad-converter/src/codegen/templates.rs` builds the static block. Both `id_lit` (line 65) and `name_lit` (line 66) are set to `raw_str_literal(&agent.name)` — they are always identical. Remove the `id_lit` variable and the `id:` line from the template.
+
+### Key Files to Modify
+
+| File | Action |
+|------|--------|
+| `crates/bmad-types/src/metadata.rs` | Remove `id` field from struct + update tests |
+| `crates/bmad-converter/src/codegen/templates.rs` | Remove `id` from template + `id_lit` variable + update test assertions |
+| `crates/bmad-plugin/src/generated/*.rs` (12 files) | Regenerated by converter — do not hand-edit |
+| `crates/bmad-plugin/src/executor.rs` | Remove `id` from `TEST_META` static in test module |
+
+### Important Constraints
+
+- `AgentMetadata` derives `Clone, Copy` — removing a field is safe, no heap concerns
+- The struct is `&'static` everywhere — field removal is a compile-time-only change
+- The converter MUST be run after modifying the template to regenerate all 12 agent files
+- Do NOT hand-edit generated files in `crates/bmad-plugin/src/generated/` — always regenerate
+
+### Regeneration Command
+
+```bash
+cargo run -p bmad-converter
+```
+
+This reads from `agents/*.md` and writes to `crates/bmad-plugin/src/generated/`. The `mod.rs` in generated/ is also regenerated.
+
+### Project Structure Notes
+
+```
+crates/
+├── bmad-types/src/
+│   └── metadata.rs      ← remove id field from AgentMetadata struct
+├── bmad-converter/src/
+│   └── codegen/
+│       └── templates.rs  ← remove id from code generation template
+├── bmad-plugin/src/
+│   ├── executor.rs       ← remove id from TEST_META in test module
+│   └── generated/        ← regenerated by converter (12 agent files + mod.rs)
+```
+
+### References
+
+- `crates/bmad-types/src/metadata.rs:6-19` — AgentMetadata struct definition
+- `crates/bmad-converter/src/codegen/templates.rs:65-87` — code generation template
+- `crates/bmad-plugin/src/generated/architect.rs:7-22` — example generated output showing id == name
+- `crates/bmad-plugin/src/executor.rs:140-147` — TEST_META static with id field
+
+## Dev Agent Record
+
+### Agent Model Used
+### Debug Log References
+### Completion Notes List
+### File List
