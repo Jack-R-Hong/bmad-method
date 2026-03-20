@@ -1,6 +1,6 @@
 # Story 5.3: Consolidate or Differentiate AgentMetadata.id and .name
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

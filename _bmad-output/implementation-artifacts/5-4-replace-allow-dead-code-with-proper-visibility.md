@@ -1,6 +1,6 @@
 # Story 5.4: Replace #[allow(dead_code)] with Proper Visibility or #[cfg(test)]
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

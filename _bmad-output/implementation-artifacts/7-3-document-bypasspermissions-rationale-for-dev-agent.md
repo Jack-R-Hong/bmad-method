@@ -1,6 +1,6 @@
 # Story 7.3: Document `bypassPermissions` Rationale for Dev Agent
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

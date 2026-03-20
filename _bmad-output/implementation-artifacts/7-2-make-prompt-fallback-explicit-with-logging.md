@@ -1,6 +1,6 @@
 # Story 7.2: Make `prompt` Fallback Explicit with Logging
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

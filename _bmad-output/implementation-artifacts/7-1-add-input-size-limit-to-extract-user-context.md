@@ -1,6 +1,6 @@
 # Story 7.1: Add Input Size Limit to `extract_user_context`
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

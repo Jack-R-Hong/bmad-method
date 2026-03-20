@@ -1,6 +1,6 @@
 # Story 9.2: Expose Agent Capabilities in BmadOutput
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

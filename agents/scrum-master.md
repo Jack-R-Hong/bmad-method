@@ -10,6 +10,9 @@ capabilities:
   - agile-coaching
   - backlog-refinement
   - daily-standup-facilitation
+model_tier: sonnet
+max_turns: 20
+permission_mode: plan
 ---
 
 # Sam the Scrum Master

@@ -9,7 +9,7 @@ fn execute_agent(agent_id: &str, prompt: &str) -> Result<StepResult, BmadError> 
     let entries = bmad_plugin::generated::all_agent_entries();
     if entries
         .iter()
-        .all(|(meta, _, _)| meta.executor_name != agent_id)
+        .all(|(meta, _, _, _)| meta.executor_name != agent_id)
     {
         return Err(BmadError::AgentNotFound(agent_id.to_string()));
     }
@@ -17,11 +17,10 @@ fn execute_agent(agent_id: &str, prompt: &str) -> Result<StepResult, BmadError> 
     let input = serde_json::json!({
         "agent": agent_id,
         "prompt": prompt
-    })
-    .to_string();
+    });
 
     let plugin = bmad_plugin::BmadMethodPlugin::default();
-    let task = TaskInput::new("integration-test", prompt).with_input(&input);
+    let task = TaskInput::new("integration-test", prompt).with_input(input);
     let config = StepConfig::new("integration-step", "agent");
 
     use pulse_plugin_sdk::wit_traits::StepExecutorPlugin as _;
@@ -112,6 +111,28 @@ fn test_three_agent_sequential_workflow() {
         qa_input.contains(arch_input),
         "QA input must contain the original architect input (accumulated DAG context at step 3)"
     );
+
+    // Story 8.4: validate suggested_config in sequential workflow output
+    assert!(arch_out["suggested_config"].is_object(), "architect must have suggested_config");
+    assert_eq!(arch_out["suggested_config"]["model_tier"].as_str().unwrap(), "opus");
+    assert_eq!(arch_out["suggested_config"]["permission_mode"].as_str().unwrap(), "plan");
+
+    assert!(dev_out["suggested_config"].is_object(), "dev must have suggested_config");
+    assert_eq!(dev_out["suggested_config"]["model_tier"].as_str().unwrap(), "sonnet");
+    assert_eq!(dev_out["suggested_config"]["permission_mode"].as_str().unwrap(), "bypassPermissions");
+
+    assert!(qa_out["suggested_config"].is_object(), "qa must have suggested_config");
+    assert_eq!(qa_out["suggested_config"]["model_tier"].as_str().unwrap(), "sonnet");
+    assert!(qa_out["suggested_config"]["max_turns"].as_u64().unwrap() > 0);
+
+    // Story 9.1: schema_version present
+    assert_eq!(arch_out["schema_version"].as_str().unwrap(), "1.1");
+    assert_eq!(dev_out["schema_version"].as_str().unwrap(), "1.1");
+    assert_eq!(qa_out["schema_version"].as_str().unwrap(), "1.1");
+
+    // Story 9.2: capabilities in metadata
+    assert!(arch_out["metadata"]["capabilities"].is_array());
+    assert!(!arch_out["metadata"]["capabilities"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -158,6 +179,12 @@ fn test_parallel_agents_no_shared_state() {
             .contains("architect_thread"),
         "qa output must not contain architect thread data"
     );
+
+    // Story 8.4: validate suggested_config in parallel outputs
+    assert!(arch_out["suggested_config"].is_object());
+    assert!(qa_out["suggested_config"].is_object());
+    assert_eq!(arch_out["suggested_config"]["model_tier"].as_str().unwrap(), "opus");
+    assert_eq!(qa_out["suggested_config"]["model_tier"].as_str().unwrap(), "sonnet");
 }
 
 #[test]

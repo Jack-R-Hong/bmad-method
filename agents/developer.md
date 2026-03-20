@@ -10,6 +10,9 @@ capabilities:
   - debugging
   - technical-documentation
   - test-writing
+model_tier: sonnet
+max_turns: 30
+permission_mode: bypassPermissions
 ---
 
 # Amelia the Developer

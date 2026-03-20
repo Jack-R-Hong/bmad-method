@@ -10,6 +10,9 @@ capabilities:
   - stakeholder-communication
   - roadmap-planning
   - acceptance-criteria-review
+model_tier: sonnet
+max_turns: 20
+permission_mode: plan
 ---
 
 # John the PM

@@ -1,6 +1,6 @@
 # Story 8.4: Add suggested_config Validation to Integration Tests
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

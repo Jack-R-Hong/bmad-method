@@ -10,6 +10,9 @@ capabilities:
   - agent-selection
   - cross-domain-coordination
   - bmad-method-expertise
+model_tier: opus
+max_turns: 20
+permission_mode: plan
 ---
 
 # BMad Master

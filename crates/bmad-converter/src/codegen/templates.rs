@@ -60,9 +60,8 @@ pub fn generate_agent_file(agent: &ParsedAgent, timestamp: &str) -> String {
         agent.name, timestamp
     );
 
-    let imports = "use bmad_types::{AgentMetadata, GenerationParams};\n\n";
+    let imports = "use bmad_types::{AgentMetadata, GenerationParams, SuggestedConfig};\n\n";
 
-    let id_lit = raw_str_literal(&agent.name);
     let name_lit = raw_str_literal(&agent.name);
     let display_name_lit = raw_str_literal(&agent.display_name);
     let description_lit = raw_str_literal(&agent.description);
@@ -70,7 +69,6 @@ pub fn generate_agent_file(agent: &ParsedAgent, timestamp: &str) -> String {
 
     let static_block = format!(
         "pub static {constant}: AgentMetadata = AgentMetadata {{\n\
-         \x20\x20\x20\x20id: {id},\n\
          \x20\x20\x20\x20name: {name},\n\
          \x20\x20\x20\x20display_name: {display_name},\n\
          \x20\x20\x20\x20description: {description},\n\
@@ -78,7 +76,6 @@ pub fn generate_agent_file(agent: &ParsedAgent, timestamp: &str) -> String {
          \x20\x20\x20\x20capabilities: {caps},\n\
          }};\n\n",
         constant = constant,
-        id = id_lit,
         name = name_lit,
         display_name = display_name_lit,
         description = description_lit,
@@ -97,12 +94,38 @@ pub fn generate_agent_file(agent: &ParsedAgent, timestamp: &str) -> String {
     let suggested_params_fn = match agent.temperature {
         Some(temp) => format!(
             "pub fn suggested_params() -> Option<GenerationParams> {{\n    \
-             Some(GenerationParams {{ model: None, temperature: Some({temp}_f32), max_tokens: None }})\n}}\n"
+             Some(GenerationParams {{ model: None, temperature: Some({temp}_f32), max_tokens: None }})\n}}\n\n"
         ),
-        None => "pub fn suggested_params() -> Option<GenerationParams> {\n    None\n}\n".to_string(),
+        None => "pub fn suggested_params() -> Option<GenerationParams> {\n    None\n}\n\n".to_string(),
     };
 
-    format!("{header}{imports}{static_block}{metadata_fn}{system_prompt}{suggested_params_fn}")
+    let suggested_config_fn = if agent.model_tier.is_some() || agent.max_turns.is_some() || agent.permission_mode.is_some() {
+        let model_tier = match &agent.model_tier {
+            Some(v) => format!("Some(\"{}\".to_string())", v),
+            None => "None".to_string(),
+        };
+        let max_turns = match agent.max_turns {
+            Some(v) => format!("Some({})", v),
+            None => "None".to_string(),
+        };
+        let permission_mode = match &agent.permission_mode {
+            Some(v) => format!("Some(\"{}\".to_string())", v),
+            None => "None".to_string(),
+        };
+        format!(
+            "pub fn suggested_config() -> Option<SuggestedConfig> {{\n    \
+             Some(SuggestedConfig {{\n        \
+             model_tier: {model_tier},\n        \
+             max_turns: {max_turns},\n        \
+             permission_mode: {permission_mode},\n        \
+             allowed_tools: None,\n    \
+             }})\n}}\n"
+        )
+    } else {
+        "pub fn suggested_config() -> Option<SuggestedConfig> {\n    None\n}\n".to_string()
+    };
+
+    format!("{header}{imports}{static_block}{metadata_fn}{system_prompt}{suggested_params_fn}{suggested_config_fn}")
 }
 
 pub fn generate_mod_file(agents: &[ParsedAgent]) -> String {
@@ -125,7 +148,7 @@ pub fn generate_mod_file(agents: &[ParsedAgent]) -> String {
     }
     out.push('\n');
 
-    out.push_str("use bmad_types::{AgentMetadata, GenerationParams};\n\n");
+    out.push_str("use bmad_types::{AgentMetadata, GenerationParams, SuggestedConfig};\n\n");
 
     out.push_str("pub fn all_agents() -> Vec<&'static AgentMetadata> {\n");
     out.push_str("    vec![\n");
@@ -138,13 +161,13 @@ pub fn generate_mod_file(agents: &[ParsedAgent]) -> String {
     out.push_str("}\n\n");
 
     out.push_str(
-        "pub fn all_agent_entries() -> Vec<(&'static AgentMetadata, &'static str, Option<GenerationParams>)> {\n",
+        "pub fn all_agent_entries() -> Vec<(&'static AgentMetadata, &'static str, Option<GenerationParams>, Option<SuggestedConfig>)> {\n",
     );
     out.push_str("    vec![\n");
     for agent in &sorted {
         let snake = to_snake_case(&agent.name);
         out.push_str(&format!(
-            "        ({snake}::metadata(), {snake}::SYSTEM_PROMPT, {snake}::suggested_params()),\n",
+            "        ({snake}::metadata(), {snake}::SYSTEM_PROMPT, {snake}::suggested_params(), {snake}::suggested_config()),\n",
             snake = snake,
         ));
     }
@@ -167,6 +190,9 @@ mod tests {
             capabilities: vec!["cap-a".to_string(), "cap-b".to_string()],
             body: format!("# {}\n\nBody text for {}.", name, name),
             temperature: None,
+            model_tier: None,
+            max_turns: None,
+            permission_mode: None,
         }
     }
 
@@ -250,8 +276,8 @@ mod tests {
         let agent = make_agent("tech-writer");
         let result = generate_agent_file(&agent, "2026-03-17T10:30:00Z");
         assert!(
-            result.contains("id: r"),
-            "id field should use raw string literal"
+            !result.contains("id:"),
+            "id field should not be present (removed)"
         );
         assert!(
             result.contains("name: r"),

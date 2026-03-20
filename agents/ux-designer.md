@@ -10,6 +10,9 @@ capabilities:
   - usability-analysis
   - interaction-design
   - accessibility-review
+model_tier: sonnet
+max_turns: 20
+permission_mode: plan
 ---
 
 # Maya the UX Designer

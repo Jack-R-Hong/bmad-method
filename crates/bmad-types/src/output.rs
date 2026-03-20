@@ -19,6 +19,9 @@ pub struct GenerationParams {
 pub struct SuggestedConfig {
     pub model_tier: Option<String>,
     pub max_turns: Option<u32>,
+    /// Advisory only. Values include "plan" (default, requires approval) and
+    /// "bypassPermissions" (no approval needed — use with caution).
+    /// The workflow engine decides whether to honor this.
     pub permission_mode: Option<String>,
     pub allowed_tools: Option<Vec<String>>,
 }

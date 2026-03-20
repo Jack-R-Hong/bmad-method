@@ -11,6 +11,9 @@ struct FrontmatterData {
     pub executor: Option<String>,
     pub capabilities: Option<Vec<String>>,
     pub temperature: Option<f32>,
+    pub model_tier: Option<String>,
+    pub max_turns: Option<u32>,
+    pub permission_mode: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,6 +25,9 @@ pub struct ParsedAgent {
     pub capabilities: Vec<String>,
     pub body: String,
     pub temperature: Option<f32>,
+    pub model_tier: Option<String>,
+    pub max_turns: Option<u32>,
+    pub permission_mode: Option<String>,
 }
 
 pub fn parse_file(path: &Path) -> Result<ParsedAgent> {
@@ -69,6 +75,9 @@ pub fn parse_file(path: &Path) -> Result<ParsedAgent> {
         capabilities,
         body,
         temperature: fm.temperature,
+        model_tier: fm.model_tier,
+        max_turns: fm.max_turns,
+        permission_mode: fm.permission_mode,
     })
 }
 
@@ -305,6 +314,94 @@ You are Maya the Specialist.
             !agent.body.is_empty(),
             "body (system prompt) must be non-empty"
         );
+    }
+
+    #[test]
+    fn parse_file_with_all_config_fields() {
+        let content = r#"---
+name: test-agent
+displayName: "Test Agent"
+description: "Test description"
+executor: bmad/test-agent
+capabilities:
+  - testing
+model_tier: opus
+max_turns: 25
+permission_mode: plan
+---
+Body text.
+"#;
+        let f = write_temp_md(content);
+        let agent = parse_file(f.path()).expect("should parse agent with config fields");
+        assert_eq!(agent.model_tier.as_deref(), Some("opus"));
+        assert_eq!(agent.max_turns, Some(25));
+        assert_eq!(agent.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn parse_file_with_partial_config_fields() {
+        let content = r#"---
+name: test-agent
+displayName: "Test Agent"
+description: "Test description"
+executor: bmad/test-agent
+capabilities:
+  - testing
+model_tier: sonnet
+---
+Body text.
+"#;
+        let f = write_temp_md(content);
+        let agent = parse_file(f.path()).expect("should parse agent with partial config");
+        assert_eq!(agent.model_tier.as_deref(), Some("sonnet"));
+        assert_eq!(agent.max_turns, None);
+        assert_eq!(agent.permission_mode, None);
+    }
+
+    #[test]
+    fn parse_file_without_config_fields_yields_none() {
+        let content = r#"---
+name: test-agent
+displayName: "Test Agent"
+description: "Test description"
+executor: bmad/test-agent
+capabilities:
+  - testing
+---
+Body text.
+"#;
+        let f = write_temp_md(content);
+        let agent = parse_file(f.path()).expect("should parse agent without config fields");
+        assert_eq!(agent.model_tier, None);
+        assert_eq!(agent.max_turns, None);
+        assert_eq!(agent.permission_mode, None);
+    }
+
+    #[test]
+    fn parse_real_agents_directory_all_have_config() {
+        let agents_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agents");
+        if !agents_dir.exists() {
+            return; // skip if running in CI without agent files
+        }
+        let agents = parse_directory(&agents_dir).expect("should parse agents directory");
+        assert_eq!(agents.len(), 12, "expected 12 agents");
+        for agent in &agents {
+            assert!(
+                agent.model_tier.is_some(),
+                "agent '{}' missing model_tier",
+                agent.name
+            );
+            assert!(
+                agent.max_turns.is_some(),
+                "agent '{}' missing max_turns",
+                agent.name
+            );
+            assert!(
+                agent.permission_mode.is_some(),
+                "agent '{}' missing permission_mode",
+                agent.name
+            );
+        }
     }
 
     #[test]

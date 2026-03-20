@@ -10,6 +10,9 @@ capabilities:
   - dependency-analysis
   - rapid-prototyping
   - multi-agent-coordination
+model_tier: sonnet
+max_turns: 20
+permission_mode: plan
 ---
 
 # Quick Flow Coordinator

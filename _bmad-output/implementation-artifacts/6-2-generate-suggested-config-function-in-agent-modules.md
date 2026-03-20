@@ -1,6 +1,6 @@
 # Story 6.2: Generate suggested_config() Function in Agent Modules
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

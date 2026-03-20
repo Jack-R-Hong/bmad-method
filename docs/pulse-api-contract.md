@@ -232,6 +232,18 @@ use pulse_api::TaskExecutor;
 
 ---
 
+## Output Security Contract
+
+The plugin passes `user_context` through verbatim. It does NOT sanitize, escape, or filter input content. Consumers that render `user_context` or `system_prompt` in HTML or other injection-sensitive contexts MUST sanitize the content before rendering.
+
+**`suggested_config` values are advisory.** The workflow YAML takes precedence. Consumers MUST review `permission_mode` values before auto-applying, especially `bypassPermissions`.
+
+If `prompt` is omitted from `BmadInput`, `task.description` is used as user context. A `tracing::warn!` is emitted when this fallback occurs.
+
+**Input size limit:** Input is bounded to 128KB (131072 bytes). Inputs exceeding this limit are rejected with an `invalid_input` error.
+
+---
+
 ## BmadExecutor Implementation Notes
 
 The current `BmadExecutor` implements the **stub** `TaskExecutor` trait (not the real plugin-api trait). This is intentional — the plugin runs standalone without a live Pulse binary. Key characteristics:

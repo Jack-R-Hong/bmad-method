@@ -1,6 +1,6 @@
 # Story 6.3: Remove Hardcoded suggested_config_for() Match Block
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

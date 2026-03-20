@@ -10,6 +10,9 @@ capabilities:
   - authentication-design
   - authorization-review
   - dependency-auditing
+model_tier: sonnet
+max_turns: 20
+permission_mode: plan
 ---
 
 # Sage the Security Reviewer

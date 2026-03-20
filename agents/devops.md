@@ -10,6 +10,9 @@ capabilities:
   - container-orchestration
   - monitoring-setup
   - incident-response
+model_tier: sonnet
+max_turns: 20
+permission_mode: plan
 ---
 
 # Devon the DevOps Engineer

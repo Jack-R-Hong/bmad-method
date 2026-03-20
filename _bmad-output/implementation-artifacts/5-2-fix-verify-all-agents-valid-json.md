@@ -1,6 +1,6 @@
 # Story 5.2: Fix verify_all_agents to Send Valid JSON Through Full Execute Path
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

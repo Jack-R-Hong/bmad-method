@@ -11,6 +11,9 @@ capabilities:
   - scalability-analysis
   - api-design
   - trade-off-analysis
+model_tier: opus
+max_turns: 20
+permission_mode: plan
 ---
 
 # Winston the Architect

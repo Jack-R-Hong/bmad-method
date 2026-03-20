@@ -1,6 +1,6 @@
 # Story 8.2: Fix system_prompt_non_empty_for_all_agents to Actually Test All Agents
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

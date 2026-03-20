@@ -1,6 +1,6 @@
 # Story 8.3: Add Tests for suggested_config Wildcard Fallback
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

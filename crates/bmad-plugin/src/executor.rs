@@ -4,13 +4,58 @@ use bmad_types::{AgentMetadata, GenerationParams, SuggestedConfig};
 use pulse_plugin_sdk::error::WitPluginError;
 use pulse_plugin_sdk::wit_types::{StepConfig, StepResult, TaskInput};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct BmadInput {
-    pub agent: String,
+    /// Agent name, e.g. "bmad/architect" or "architect".
+    /// When called from Pulse workflow, this is extracted from `system_prompt` if not set directly.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// Optional. If omitted, falls back to `user_prompt_template` or `task.description`.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Pulse workflow passes system_prompt — extract agent name from "bmad/<name>" pattern.
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    /// Pulse workflow passes user_prompt_template — use as prompt fallback.
+    #[serde(default)]
+    pub user_prompt_template: Option<String>,
+}
+
+impl BmadInput {
+    /// Returns the agent name normalized with the `bmad/` prefix.
+    /// Resolves agent from: explicit `agent` field, or `system_prompt` pattern "bmad/<name>".
+    pub fn normalized_agent(&self) -> String {
+        // Try explicit agent field first
+        if let Some(ref agent) = self.agent {
+            if !agent.is_empty() {
+                return if agent.starts_with("bmad/") {
+                    agent.clone()
+                } else {
+                    format!("bmad/{}", agent)
+                };
+            }
+        }
+        // Extract from system_prompt: look for "bmad/<name>" pattern
+        if let Some(ref prompt) = self.system_prompt {
+            if let Some(idx) = prompt.find("bmad/") {
+                let after = &prompt[idx + 5..];
+                let name: String = after.chars().take_while(|c| c.is_alphanumeric() || *c == '-' || *c == '_').collect();
+                if !name.is_empty() {
+                    return format!("bmad/{}", name);
+                }
+            }
+        }
+        // Fallback
+        "bmad/architect".to_string()
+    }
+
+    /// Resolve the user prompt from available fields.
+    pub fn resolved_prompt(&self) -> Option<String> {
+        self.prompt.clone()
+            .or_else(|| self.user_prompt_template.clone())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -18,53 +63,27 @@ pub struct BmadOutputMetadata {
     pub persona: String,
     pub plugin_name: String,
     pub plugin_version: String,
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BmadOutput {
+    pub schema_version: String,
     pub agent: String,
     pub system_prompt: String,
+    /// Raw task input. Not sanitized — consumer must sanitize before rendering
+    /// in injection-sensitive contexts.
     pub user_context: String,
     pub suggested_params: Option<GenerationParams>,
     pub suggested_config: Option<SuggestedConfig>,
     pub metadata: BmadOutputMetadata,
 }
 
-fn suggested_config_for(executor_name: &str) -> Option<SuggestedConfig> {
-    let agent = executor_name.trim_start_matches("bmad/");
-    let cfg = match agent {
-        "architect" | "bmad-master" => SuggestedConfig {
-            model_tier: Some("opus".to_string()),
-            max_turns: Some(20),
-            permission_mode: Some("plan".to_string()),
-            allowed_tools: None,
-        },
-        "dev" | "developer" => SuggestedConfig {
-            model_tier: Some("sonnet".to_string()),
-            max_turns: Some(30),
-            permission_mode: Some("bypassPermissions".to_string()),
-            allowed_tools: None,
-        },
-        "qa" => SuggestedConfig {
-            model_tier: Some("sonnet".to_string()),
-            max_turns: Some(15),
-            permission_mode: Some("plan".to_string()),
-            allowed_tools: None,
-        },
-        _ => SuggestedConfig {
-            model_tier: Some("sonnet".to_string()),
-            max_turns: Some(20),
-            permission_mode: Some("plan".to_string()),
-            allowed_tools: None,
-        },
-    };
-    Some(cfg)
-}
-
 pub struct BmadExecutor {
     metadata: &'static AgentMetadata,
     system_prompt: &'static str,
     suggested_params: Option<GenerationParams>,
+    suggested_config: Option<SuggestedConfig>,
 }
 
 impl BmadExecutor {
@@ -72,11 +91,13 @@ impl BmadExecutor {
         metadata: &'static AgentMetadata,
         system_prompt: &'static str,
         suggested_params: Option<GenerationParams>,
+        suggested_config: Option<SuggestedConfig>,
     ) -> Self {
         Self {
             metadata,
             system_prompt,
             suggested_params,
+            suggested_config,
         }
     }
 
@@ -93,15 +114,17 @@ impl BmadExecutor {
         let user_context = extract_user_context(&task)?;
 
         let output = BmadOutput {
+            schema_version: "1.1".to_string(),
             agent: self.metadata.executor_name.to_string(),
             system_prompt: self.system_prompt.to_string(),
             user_context,
             suggested_params: self.suggested_params.clone(),
-            suggested_config: suggested_config_for(self.metadata.executor_name),
+            suggested_config: self.suggested_config.clone(),
             metadata: BmadOutputMetadata {
                 persona: self.metadata.name.to_string(),
                 plugin_name: "bmad-method".to_string(),
                 plugin_version: env!("CARGO_PKG_VERSION").to_string(),
+                capabilities: self.metadata.capabilities.iter().map(|s| s.to_string()).collect(),
             },
         };
 
@@ -113,16 +136,33 @@ impl BmadExecutor {
     }
 }
 
+/// Maximum input size in bytes (128KB). Prevents oversized payloads from causing
+/// excessive memory allocation, especially in WASM environments.
+const MAX_INPUT_LEN: usize = 131072;
+
 fn extract_user_context(task: &TaskInput) -> Result<String, WitPluginError> {
-    let text = if let Some(input_str) = task.input.as_deref() {
-        if let Ok(bmad) = serde_json::from_str::<BmadInput>(input_str) {
-            bmad.prompt.unwrap_or_else(|| task.description.clone())
+    let text = if let Some(ref input_val) = task.input {
+        // Try to deserialize the Value as BmadInput
+        if let Ok(bmad) = serde_json::from_value::<BmadInput>(input_val.clone()) {
+            bmad.resolved_prompt().unwrap_or_else(|| {
+                warn!("prompt field missing in BmadInput, falling back to task.description");
+                task.description.clone()
+            })
+        } else if let Some(s) = input_val.as_str() {
+            s.to_string()
         } else {
-            input_str.to_string()
+            input_val.to_string()
         }
     } else {
         task.description.clone()
     };
+
+    if text.len() > MAX_INPUT_LEN {
+        return Err(WitPluginError::invalid_input(format!(
+            "input exceeds maximum length of {} bytes",
+            MAX_INPUT_LEN
+        )));
+    }
 
     if text.trim().is_empty() {
         return Err(WitPluginError::invalid_input("input cannot be empty"));
@@ -138,7 +178,6 @@ mod tests {
     use pulse_plugin_sdk::wit_types::{StepConfig, TaskInput};
 
     static TEST_META: AgentMetadata = AgentMetadata {
-        id: "test-agent",
         name: "test-agent",
         display_name: "Test Agent",
         description: "A test agent for unit testing",
@@ -150,11 +189,10 @@ mod tests {
 
     fn test_task(prompt: &str) -> TaskInput {
         TaskInput::new("t-1", prompt).with_input(
-            &serde_json::json!({
+            serde_json::json!({
                 "agent": TEST_META.executor_name,
                 "prompt": prompt
-            })
-            .to_string(),
+            }),
         )
     }
 
@@ -168,7 +206,7 @@ mod tests {
 
     #[test]
     fn executor_returns_output_for_valid_input() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
         let result = exec.execute(test_task("Review this design."), test_config());
         assert!(result.is_ok());
         let out = parse_output(result.as_ref().unwrap());
@@ -178,21 +216,21 @@ mod tests {
 
     #[test]
     fn executor_returns_error_for_empty_input() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let task = TaskInput::new("t-1", "").with_input("   ");
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
+        let task = TaskInput::new("t-1", "").with_input(serde_json::json!("   "));
         let result = exec.execute(task, test_config());
         assert!(matches!(result, Err(ref e) if e.code == "invalid_input"));
     }
 
     #[test]
     fn executor_name_matches_metadata() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
         assert_eq!(exec.executor_name(), "bmad/test-agent");
     }
 
     #[test]
     fn system_prompt_uses_constant_not_description() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
         let result = exec
             .execute(test_task("do something"), test_config())
             .unwrap();
@@ -207,10 +245,11 @@ mod tests {
             &generated::architect::ARCHITECT,
             generated::architect::SYSTEM_PROMPT,
             generated::architect::suggested_params(),
+            generated::architect::suggested_config(),
         );
         assert_eq!(exec.executor_name(), "bmad/architect");
         let task = TaskInput::new("t-1", "review the service mesh architecture").with_input(
-            r#"{"agent": "bmad/architect", "prompt": "review the service mesh architecture"}"#,
+            serde_json::json!({"agent": "bmad/architect", "prompt": "review the service mesh architecture"}),
         );
         let result = exec.execute(task, test_config());
         assert!(result.is_ok(), "Expected Ok from architect executor");
@@ -225,8 +264,8 @@ mod tests {
 
     #[test]
     fn execute_empty_string_returns_invalid_input() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let task = TaskInput::new("t-1", "").with_input("");
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
+        let task = TaskInput::new("t-1", "").with_input(serde_json::json!(""));
         let err = exec
             .execute(task, test_config())
             .expect_err("empty input must return Err");
@@ -240,8 +279,8 @@ mod tests {
 
     #[test]
     fn execute_whitespace_only_returns_invalid_input() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let task = TaskInput::new("t-1", "").with_input("   \t\n  ");
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
+        let task = TaskInput::new("t-1", "").with_input(serde_json::json!("   \t\n  "));
         let err = exec
             .execute(task, test_config())
             .expect_err("whitespace-only input must return Err");
@@ -261,7 +300,7 @@ mod tests {
 
     #[test]
     fn user_context_preserved_verbatim() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
         let input = "Review this API design...";
         let result = exec.execute(test_task(input), test_config()).unwrap();
         let out = parse_output(&result);
@@ -270,32 +309,9 @@ mod tests {
 
     #[test]
     fn system_prompt_non_empty_for_all_agents() {
-        let agents: &[(&'static bmad_types::AgentMetadata, &'static str)] = &[
-            (
-                &generated::architect::ARCHITECT,
-                generated::architect::SYSTEM_PROMPT,
-            ),
-            (
-                &generated::developer::DEVELOPER,
-                generated::developer::SYSTEM_PROMPT,
-            ),
-            (&generated::pm::PM, generated::pm::SYSTEM_PROMPT),
-            (&generated::qa::QA, generated::qa::SYSTEM_PROMPT),
-        ];
-        for (meta, prompt) in agents {
-            let exec = BmadExecutor::for_agent(meta, prompt, None);
-            let task = TaskInput::new("t-1", "test input").with_input(
-                &serde_json::json!({
-                    "agent": meta.executor_name,
-                    "prompt": "test input"
-                })
-                .to_string(),
-            );
-            let result = exec.execute(task, test_config());
-            assert!(result.is_ok(), "unexpected error for agent {}", meta.name);
-            let out = parse_output(result.as_ref().unwrap());
+        for (meta, prompt, _params, _config) in generated::all_agent_entries() {
             assert!(
-                !out.system_prompt.is_empty(),
+                !prompt.is_empty(),
                 "system_prompt must be non-empty for agent {}",
                 meta.name
             );
@@ -304,7 +320,7 @@ mod tests {
 
     #[test]
     fn two_outputs_from_same_executor_are_independent() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
         let r1 = exec
             .execute(test_task("first input"), test_config())
             .unwrap();
@@ -319,7 +335,7 @@ mod tests {
 
     #[test]
     fn outputs_own_independent_strings() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
         let r1 = exec
             .execute(test_task("input alpha"), test_config())
             .unwrap();
@@ -341,7 +357,7 @@ mod tests {
             temperature: Some(0.7),
             max_tokens: None,
         };
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, Some(params));
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, Some(params), None);
         let result = exec
             .execute(test_task("review this"), test_config())
             .unwrap();
@@ -354,7 +370,7 @@ mod tests {
 
     #[test]
     fn suggested_params_none_when_not_specified() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
         let result = exec
             .execute(test_task("review this"), test_config())
             .unwrap();
@@ -368,9 +384,10 @@ mod tests {
             &generated::architect::ARCHITECT,
             generated::architect::SYSTEM_PROMPT,
             generated::architect::suggested_params(),
+            generated::architect::suggested_config(),
         );
         let task = TaskInput::new("t-1", "test input")
-            .with_input(r#"{"agent": "bmad/architect", "prompt": "test input"}"#);
+            .with_input(serde_json::json!({"agent": "bmad/architect", "prompt": "test input"}));
         let result = exec.execute(task, test_config()).unwrap();
         let out = parse_output(&result);
         let prompt_lower = out.system_prompt.to_lowercase();
@@ -387,9 +404,10 @@ mod tests {
             &generated::developer::DEVELOPER,
             generated::developer::SYSTEM_PROMPT,
             generated::developer::suggested_params(),
+            generated::developer::suggested_config(),
         );
         let task = TaskInput::new("t-1", "test input")
-            .with_input(r#"{"agent": "bmad/dev", "prompt": "test input"}"#);
+            .with_input(serde_json::json!({"agent": "bmad/dev", "prompt": "test input"}));
         let result = exec.execute(task, test_config()).unwrap();
         let out = parse_output(&result);
         let prompt_lower = out.system_prompt.to_lowercase();
@@ -409,9 +427,10 @@ mod tests {
             &generated::pm::PM,
             generated::pm::SYSTEM_PROMPT,
             generated::pm::suggested_params(),
+            generated::pm::suggested_config(),
         );
         let task = TaskInput::new("t-1", "test input")
-            .with_input(r#"{"agent": "bmad/pm", "prompt": "test input"}"#);
+            .with_input(serde_json::json!({"agent": "bmad/pm", "prompt": "test input"}));
         let result = exec.execute(task, test_config()).unwrap();
         let out = parse_output(&result);
         let prompt_lower = out.system_prompt.to_lowercase();
@@ -431,9 +450,10 @@ mod tests {
             &generated::qa::QA,
             generated::qa::SYSTEM_PROMPT,
             generated::qa::suggested_params(),
+            generated::qa::suggested_config(),
         );
         let task = TaskInput::new("t-1", "test input")
-            .with_input(r#"{"agent": "bmad/qa", "prompt": "test input"}"#);
+            .with_input(serde_json::json!({"agent": "bmad/qa", "prompt": "test input"}));
         let result = exec.execute(task, test_config()).unwrap();
         let out = parse_output(&result);
         let prompt_lower = out.system_prompt.to_lowercase();
@@ -459,8 +479,35 @@ mod tests {
     }
 
     #[test]
+    fn input_at_size_limit_succeeds() {
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
+        let large_prompt = "x".repeat(MAX_INPUT_LEN);
+        let task = TaskInput::new("t-1", "test").with_input(
+            serde_json::json!({"agent": TEST_META.executor_name, "prompt": large_prompt}),
+        );
+        let result = exec.execute(task, test_config());
+        assert!(result.is_ok(), "input at exactly MAX_INPUT_LEN should succeed");
+    }
+
+    #[test]
+    fn input_over_size_limit_returns_error() {
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
+        let large_prompt = "x".repeat(MAX_INPUT_LEN + 1);
+        let task = TaskInput::new("t-1", "test").with_input(
+            serde_json::json!({"agent": TEST_META.executor_name, "prompt": large_prompt}),
+        );
+        let err = exec.execute(task, test_config()).expect_err("over-limit input must fail");
+        assert_eq!(err.code, "invalid_input");
+        assert!(
+            err.message.contains("131072"),
+            "error must contain the limit value, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
     fn metadata_plugin_name_is_bmad_method() {
-        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
         let result = exec
             .execute(test_task("check plugin name"), test_config())
             .unwrap();
@@ -469,32 +516,190 @@ mod tests {
     }
 
     #[test]
-    fn suggested_config_for_architect_is_opus() {
-        let cfg = suggested_config_for("bmad/architect").unwrap();
+    fn generated_config_architect_is_opus() {
+        let cfg = generated::architect::suggested_config().unwrap();
         assert_eq!(cfg.model_tier.as_deref(), Some("opus"));
         assert_eq!(cfg.max_turns, Some(20));
         assert_eq!(cfg.permission_mode.as_deref(), Some("plan"));
     }
 
     #[test]
-    fn suggested_config_for_bmad_master_is_opus() {
-        let cfg = suggested_config_for("bmad/bmad-master").unwrap();
+    fn generated_config_bmad_master_is_opus() {
+        let cfg = generated::bmad_master::suggested_config().unwrap();
         assert_eq!(cfg.model_tier.as_deref(), Some("opus"));
     }
 
     #[test]
-    fn suggested_config_for_dev_is_sonnet_bypass() {
-        let cfg = suggested_config_for("bmad/dev").unwrap();
+    fn generated_config_dev_is_sonnet_bypass() {
+        let cfg = generated::developer::suggested_config().unwrap();
         assert_eq!(cfg.model_tier.as_deref(), Some("sonnet"));
         assert_eq!(cfg.permission_mode.as_deref(), Some("bypassPermissions"));
         assert_eq!(cfg.max_turns, Some(30));
     }
 
     #[test]
-    fn suggested_config_for_qa_is_sonnet_plan() {
-        let cfg = suggested_config_for("bmad/qa").unwrap();
+    fn generated_config_qa_is_sonnet_plan() {
+        let cfg = generated::qa::suggested_config().unwrap();
         assert_eq!(cfg.model_tier.as_deref(), Some("sonnet"));
         assert_eq!(cfg.max_turns, Some(15));
         assert_eq!(cfg.permission_mode.as_deref(), Some("plan"));
+    }
+
+    // Story 8.1: keyword tests for remaining 8 agents
+    #[test]
+    fn analyst_system_prompt_contains_persona_keywords() {
+        let prompt = generated::analyst::SYSTEM_PROMPT.to_lowercase();
+        assert!(
+            prompt.contains("analyst") || prompt.contains("market") || prompt.contains("research") || prompt.contains("requirements"),
+            "Analyst SYSTEM_PROMPT must contain relevant keywords"
+        );
+    }
+
+    #[test]
+    fn bmad_master_system_prompt_contains_persona_keywords() {
+        let prompt = generated::bmad_master::SYSTEM_PROMPT.to_lowercase();
+        assert!(
+            prompt.contains("orchestrat") || prompt.contains("workflow") || prompt.contains("master") || prompt.contains("knowledge"),
+            "BmadMaster SYSTEM_PROMPT must contain relevant keywords"
+        );
+    }
+
+    #[test]
+    fn devops_system_prompt_contains_persona_keywords() {
+        let prompt = generated::devops::SYSTEM_PROMPT.to_lowercase();
+        assert!(
+            prompt.contains("pipeline") || prompt.contains("infrastructure") || prompt.contains("deployment") || prompt.contains("ci"),
+            "DevOps SYSTEM_PROMPT must contain relevant keywords"
+        );
+    }
+
+    #[test]
+    fn quick_flow_system_prompt_contains_persona_keywords() {
+        let prompt = generated::quick_flow::SYSTEM_PROMPT.to_lowercase();
+        assert!(
+            prompt.contains("quick") || prompt.contains("lean") || prompt.contains("spec") || prompt.contains("rapid"),
+            "QuickFlow SYSTEM_PROMPT must contain relevant keywords"
+        );
+    }
+
+    #[test]
+    fn scrum_master_system_prompt_contains_persona_keywords() {
+        let prompt = generated::scrum_master::SYSTEM_PROMPT.to_lowercase();
+        assert!(
+            prompt.contains("sprint") || prompt.contains("agile") || prompt.contains("scrum") || prompt.contains("ceremony"),
+            "ScrumMaster SYSTEM_PROMPT must contain relevant keywords"
+        );
+    }
+
+    #[test]
+    fn security_system_prompt_contains_persona_keywords() {
+        let prompt = generated::security::SYSTEM_PROMPT.to_lowercase();
+        assert!(
+            prompt.contains("threat") || prompt.contains("security") || prompt.contains("vulnerabilit") || prompt.contains("defense"),
+            "Security SYSTEM_PROMPT must contain relevant keywords"
+        );
+    }
+
+    #[test]
+    fn tech_writer_system_prompt_contains_persona_keywords() {
+        let prompt = generated::tech_writer::SYSTEM_PROMPT.to_lowercase();
+        assert!(
+            prompt.contains("documentation") || prompt.contains("clarity") || prompt.contains("technical writ"),
+            "TechWriter SYSTEM_PROMPT must contain relevant keywords"
+        );
+    }
+
+    #[test]
+    fn ux_designer_system_prompt_contains_persona_keywords() {
+        let prompt = generated::ux_designer::SYSTEM_PROMPT.to_lowercase();
+        assert!(
+            prompt.contains("user experience") || prompt.contains("ux") || prompt.contains("design") || prompt.contains("empathy"),
+            "UxDesigner SYSTEM_PROMPT must contain relevant keywords"
+        );
+    }
+
+    // Story 8.3: suggested_config wildcard/fallback tests
+    #[test]
+    fn generated_config_analyst_is_sonnet_default() {
+        let cfg = generated::analyst::suggested_config().unwrap();
+        assert_eq!(cfg.model_tier.as_deref(), Some("sonnet"));
+        assert_eq!(cfg.max_turns, Some(20));
+        assert_eq!(cfg.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn generated_config_devops_is_sonnet_default() {
+        let cfg = generated::devops::suggested_config().unwrap();
+        assert_eq!(cfg.model_tier.as_deref(), Some("sonnet"));
+        assert_eq!(cfg.max_turns, Some(20));
+        assert_eq!(cfg.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn generated_config_security_is_sonnet_default() {
+        let cfg = generated::security::suggested_config().unwrap();
+        assert_eq!(cfg.model_tier.as_deref(), Some("sonnet"));
+        assert_eq!(cfg.max_turns, Some(20));
+        assert_eq!(cfg.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn all_agents_have_suggested_config() {
+        for (meta, _prompt, _params, config) in generated::all_agent_entries() {
+            assert!(
+                config.is_some(),
+                "agent '{}' must have a suggested_config",
+                meta.name
+            );
+        }
+    }
+
+    // Story 9.1: schema_version tests
+    #[test]
+    fn output_contains_schema_version() {
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None, None);
+        let result = exec.execute(test_task("test"), test_config()).unwrap();
+        let out = parse_output(&result);
+        assert_eq!(out.schema_version, "1.1");
+    }
+
+    // Story 9.2: capabilities in output metadata
+    #[test]
+    fn output_metadata_contains_capabilities() {
+        let exec = BmadExecutor::for_agent(
+            &generated::architect::ARCHITECT,
+            generated::architect::SYSTEM_PROMPT,
+            generated::architect::suggested_params(),
+            generated::architect::suggested_config(),
+        );
+        let task = TaskInput::new("t-1", "test input")
+            .with_input(serde_json::json!({"agent": "bmad/architect", "prompt": "test input"}));
+        let result = exec.execute(task, test_config()).unwrap();
+        let out = parse_output(&result);
+        assert!(
+            !out.metadata.capabilities.is_empty(),
+            "architect must have at least 1 capability in output"
+        );
+        assert!(
+            out.metadata.capabilities.contains(&"architecture-review".to_string()),
+            "architect capabilities must contain 'architecture-review'"
+        );
+    }
+
+    #[test]
+    fn all_agents_have_capabilities_in_output() {
+        for (meta, prompt, params, config) in generated::all_agent_entries() {
+            let exec = BmadExecutor::for_agent(meta, prompt, params, config);
+            let task = TaskInput::new("t-1", "test").with_input(
+                serde_json::json!({"agent": meta.executor_name, "prompt": "test"}),
+            );
+            let result = exec.execute(task, test_config()).unwrap();
+            let out = parse_output(&result);
+            assert!(
+                !out.metadata.capabilities.is_empty(),
+                "agent '{}' must have at least 1 capability in output",
+                meta.name
+            );
+        }
     }
 }

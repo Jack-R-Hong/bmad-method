@@ -48,8 +48,9 @@ All 5 fields below are present in every agent file and must be present for the c
 | Field | YAML Type | Default | Description | Example |
 |-------|-----------|---------|-------------|---------|
 | `temperature` | float (f32) | `None` | Suggested LLM sampling temperature (0.0–2.0). When absent, `ParsedAgent.temperature` is `None` and the caller uses its own default. | `0.7` |
-
-No other optional fields were found across the 12 catalogued agents.
+| `model_tier` | string | `None` | Suggested model tier for this agent. Valid values: `"opus"`, `"sonnet"`, `"haiku"`. | `opus` |
+| `max_turns` | integer (u32) | `None` | Maximum number of turns suggested for this agent. | `20` |
+| `permission_mode` | string | `None` | Advisory permission mode. Valid values: `"plan"` (default, requires approval), `"bypassPermissions"` (no approval — use with caution). **Security note:** `suggested_config` values are advisory. The workflow YAML takes precedence. Consumers MUST review `permission_mode` values before auto-applying, especially `bypassPermissions`. | `plan` |
 
 ---
 
@@ -118,6 +119,9 @@ After `parse_file()` succeeds, the result is a `ParsedAgent`:
 | `executor` | `executor_name` | `String` |
 | `capabilities` | `capabilities` | `Vec<String>` |
 | `temperature` | `temperature` | `Option<f32>` |
+| `model_tier` | `model_tier` | `Option<String>` |
+| `max_turns` | `max_turns` | `Option<u32>` |
+| `permission_mode` | `permission_mode` | `Option<String>` |
 | (file body after `---`) | `body` | `String` |
 
 ### `AgentMetadata` (generated static type)
@@ -126,13 +130,13 @@ After code generation, each agent is compiled into a static `AgentMetadata`:
 
 | Frontmatter Field | `AgentMetadata` Field | Rust Type |
 |-------------------|-----------------------|-----------|
-| `name` | `name` and `id` | `&'static str` |
+| `name` | `name` | `&'static str` |
 | `displayName` | `display_name` | `&'static str` |
 | `description` | `description` | `&'static str` |
 | `executor` | `executor_name` | `&'static str` |
 | `capabilities` | `capabilities` | `&'static [&'static str]` |
 
-Note: `AgentMetadata.id` is set to the same value as `name`. There is no separate `id` field in the frontmatter — `id` is always derived from `name` during code generation.
+Note: `AgentMetadata` does not carry config fields (`model_tier`, `max_turns`, `permission_mode`). Those are generated into a separate `suggested_config()` function in each agent module.
 
 ---
 

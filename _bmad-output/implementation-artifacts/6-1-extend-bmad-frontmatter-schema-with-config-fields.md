@@ -1,6 +1,6 @@
 # Story 6.1: Extend BMAD Frontmatter Schema with Config Fields
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

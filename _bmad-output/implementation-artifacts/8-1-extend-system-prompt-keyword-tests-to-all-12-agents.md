@@ -1,6 +1,6 @@
 # Story 8.1: Extend System Prompt Keyword Tests to All 12 Agents
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

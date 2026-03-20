@@ -52,6 +52,9 @@ mod tests {
             capabilities: vec!["cap".to_string()],
             body: format!("# {}\n\nBody.", name),
             temperature: None,
+            model_tier: None,
+            max_turns: None,
+            permission_mode: None,
         }
     }
 

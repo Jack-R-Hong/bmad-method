@@ -1,6 +1,6 @@
 # Story 7.4: Document Input Sanitization Responsibility Boundary
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 

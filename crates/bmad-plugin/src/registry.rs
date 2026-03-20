@@ -24,20 +24,64 @@ pub fn verify_all_agents() -> Vec<VerificationResult> {
     let entries = crate::generated::all_agent_entries();
     entries
         .into_iter()
-        .map(|(meta, prompt, params)| {
-            let executor = crate::executor::BmadExecutor::for_agent(meta, prompt, params);
-            let task = TaskInput::new("health-check", "ping").with_input("ping");
+        .map(|(meta, prompt, params, config)| {
+            let executor = crate::executor::BmadExecutor::for_agent(meta, prompt, params, config);
+            let input_json = serde_json::json!({
+                "agent": meta.executor_name,
+                "prompt": "health-check"
+            });
+            let task = TaskInput::new("health-check", "health-check").with_input(input_json);
             let config = StepConfig::new("health-check", "agent");
             match executor.execute(task, config) {
-                Ok(_) => VerificationResult {
-                    executor_name: meta.executor_name.to_string(),
-                    passed: true,
-                    failure_reason: None,
-                },
+                Ok(result) => {
+                    // Validate output content
+                    let content = match result.content.as_deref() {
+                        Some(c) => c,
+                        None => {
+                            return VerificationResult {
+                                executor_name: meta.executor_name.to_string(),
+                                passed: false,
+                                failure_reason: Some("output content is None".to_string()),
+                            };
+                        }
+                    };
+                    let output: crate::executor::BmadOutput = match serde_json::from_str(content) {
+                        Ok(o) => o,
+                        Err(e) => {
+                            return VerificationResult {
+                                executor_name: meta.executor_name.to_string(),
+                                passed: false,
+                                failure_reason: Some(format!("output is not valid JSON: {e}")),
+                            };
+                        }
+                    };
+                    if output.system_prompt.is_empty() {
+                        return VerificationResult {
+                            executor_name: meta.executor_name.to_string(),
+                            passed: false,
+                            failure_reason: Some("system_prompt is empty".to_string()),
+                        };
+                    }
+                    if output.agent != meta.executor_name {
+                        return VerificationResult {
+                            executor_name: meta.executor_name.to_string(),
+                            passed: false,
+                            failure_reason: Some(format!(
+                                "agent field mismatch: expected '{}', got '{}'",
+                                meta.executor_name, output.agent
+                            )),
+                        };
+                    }
+                    VerificationResult {
+                        executor_name: meta.executor_name.to_string(),
+                        passed: true,
+                        failure_reason: None,
+                    }
+                }
                 Err(e) => VerificationResult {
                     executor_name: meta.executor_name.to_string(),
                     passed: false,
-                    failure_reason: Some(e.to_string()),
+                    failure_reason: Some(format!("execute failed: {e}")),
                 },
             }
         })
@@ -56,7 +100,6 @@ impl Default for AgentRegistry {
 }
 
 impl AgentRegistry {
-    #[allow(dead_code)]
     pub fn new() -> Self {
         let all = crate::generated::all_agents();
         let mut agents: HashMap<&'static str, &'static AgentMetadata> =
@@ -69,17 +112,15 @@ impl AgentRegistry {
         Self { agents, sorted }
     }
 
-    #[allow(dead_code)]
     pub fn find_agent(&self, executor_name: &str) -> Option<&'static AgentMetadata> {
         self.agents.get(executor_name).copied()
     }
 
-    #[allow(dead_code)]
     pub fn list_agents(&self) -> &[AgentMetadata] {
         &self.sorted
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn count(&self) -> usize {
         self.agents.len()
     }
@@ -346,6 +387,32 @@ mod tests {
                     .all(|c| c.is_lowercase() || c.is_ascii_digit() || c == '-'),
                 "executor identifier '{}' contains invalid characters (must be lowercase, digits, hyphens only)",
                 identifier
+            );
+        }
+    }
+
+    #[test]
+    fn health_check_input_is_valid_bmad_input() {
+        // Verify the JSON we construct in verify_all_agents is valid BmadInput
+        let meta = &crate::generated::architect::ARCHITECT;
+        let input_json = serde_json::json!({
+            "agent": meta.executor_name,
+            "prompt": "health-check"
+        });
+        let bmad_input: crate::executor::BmadInput =
+            serde_json::from_value(input_json).expect("health check JSON must be valid BmadInput");
+        assert_eq!(bmad_input.agent, "bmad/architect");
+        assert_eq!(bmad_input.prompt.as_deref(), Some("health-check"));
+    }
+
+    #[test]
+    fn health_check_output_has_non_empty_system_prompt() {
+        let results = super::verify_all_agents();
+        for r in &results {
+            assert!(
+                r.passed,
+                "Agent '{}' failed health check: {:?}",
+                r.executor_name, r.failure_reason
             );
         }
     }

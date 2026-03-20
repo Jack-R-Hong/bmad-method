@@ -10,6 +10,9 @@ capabilities:
   - changelog-writing
   - onboarding-documentation
   - content-structure-design
+model_tier: sonnet
+max_turns: 20
+permission_mode: plan
 ---
 
 # Taylor the Tech Writer

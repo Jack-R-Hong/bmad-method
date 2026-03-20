@@ -10,6 +10,9 @@ capabilities:
   - stakeholder-mapping
   - gap-analysis
   - use-case-documentation
+model_tier: sonnet
+max_turns: 20
+permission_mode: plan
 ---
 
 # Alex the Business Analyst

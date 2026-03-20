@@ -42,19 +42,37 @@ impl PluginLifecycle for BmadMethodPlugin {
 
 impl StepExecutorPlugin for BmadMethodPlugin {
     fn execute(&self, task: TaskInput, config: StepConfig) -> Result<StepResult, WitPluginError> {
-        let input_str = task.input.as_deref().ok_or_else(|| {
-            WitPluginError::invalid_input(
-                "task input is required; send JSON {\"agent\": \"bmad/architect\", \"prompt\": \"...\"}",
-            )
-        })?;
+        // Respond to capability probe from plugin-loader
+        if task.task_id == "__probe__" {
+            return Ok(StepResult {
+                step_id: "__probe__".to_string(),
+                status: "probe_ok".to_string(),
+                content: None,
+                execution_time_ms: 0,
+            });
+        }
 
-        let bmad_input: BmadInput = serde_json::from_str(input_str)
+        // Accept input from task.input (direct call) or from the step config itself
+        // (Pulse orchestrator passes AgentStepConfig as task input)
+        let input_val = task.input.as_ref()
+            .or_else(|| {
+                // Try to extract from metadata if available
+                None
+            })
+            .ok_or_else(|| {
+                WitPluginError::invalid_input(
+                    "task input is required; send JSON {\"agent\": \"bmad/architect\", \"prompt\": \"...\"}",
+                )
+            })?;
+
+        let bmad_input: BmadInput = serde_json::from_value(input_val.clone())
             .map_err(|e| WitPluginError::invalid_input(format!("invalid BMAD input JSON: {e}")))?;
 
+        let normalized = bmad_input.normalized_agent();
         let entries = generated::all_agent_entries();
-        let (meta, prompt, params) = entries
+        let (meta, prompt, params, suggested_cfg) = entries
             .into_iter()
-            .find(|(m, _, _)| m.executor_name == bmad_input.agent)
+            .find(|(m, _, _, _)| m.executor_name == normalized)
             .ok_or_else(|| {
                 let available: Vec<&str> = generated::all_agents()
                     .iter()
@@ -62,12 +80,12 @@ impl StepExecutorPlugin for BmadMethodPlugin {
                     .collect();
                 WitPluginError::not_found(format!(
                     "Unknown agent persona: {}. Available: [{}]",
-                    bmad_input.agent,
+                    normalized,
                     available.join(", ")
                 ))
             })?;
 
-        let exec = executor::BmadExecutor::for_agent(meta, prompt, params);
+        let exec = executor::BmadExecutor::for_agent(meta, prompt, params, suggested_cfg);
         exec.execute(task, config)
     }
 }
@@ -122,7 +140,7 @@ mod tests {
     #[test]
     fn execute_invalid_json_returns_invalid_input() {
         let plugin = BmadMethodPlugin;
-        let task = TaskInput::new("t1", "test").with_input("not json at all");
+        let task = TaskInput::new("t1", "test").with_input(serde_json::json!("not json at all"));
         let config = StepConfig::new("s1", "agent");
         let err = plugin.execute(task, config).unwrap_err();
         assert_eq!(err.code, "invalid_input");
@@ -132,7 +150,7 @@ mod tests {
     fn execute_unknown_agent_returns_not_found() {
         let plugin = BmadMethodPlugin;
         let task = TaskInput::new("t1", "test")
-            .with_input(r#"{"agent": "bmad/nonexistent", "prompt": "test"}"#);
+            .with_input(serde_json::json!({"agent": "bmad/nonexistent", "prompt": "test"}));
         let config = StepConfig::new("s1", "agent");
         let err = plugin.execute(task, config).unwrap_err();
         assert_eq!(err.code, "not_found");
@@ -153,7 +171,7 @@ mod tests {
     fn execute_architect_returns_success() {
         let plugin = BmadMethodPlugin;
         let task = TaskInput::new("t1", "Design a system").with_input(
-            r#"{"agent": "bmad/architect", "prompt": "Design a microservices architecture"}"#,
+            serde_json::json!({"agent": "bmad/architect", "prompt": "Design a microservices architecture"}),
         );
         let config = StepConfig::new("s1", "agent");
         let result = plugin.execute(task, config).unwrap();
@@ -166,7 +184,7 @@ mod tests {
     fn execute_content_is_valid_json_with_system_prompt() {
         let plugin = BmadMethodPlugin;
         let task = TaskInput::new("t1", "test")
-            .with_input(r#"{"agent": "bmad/architect", "prompt": "Design a system"}"#);
+            .with_input(serde_json::json!({"agent": "bmad/architect", "prompt": "Design a system"}));
         let config = StepConfig::new("s1", "agent");
         let result = plugin.execute(task, config).unwrap();
         let content: serde_json::Value =
@@ -198,7 +216,7 @@ mod tests {
                 r#"{{"agent": "{}", "prompt": "test input for agent"}}"#,
                 agent.executor_name
             );
-            let task = TaskInput::new("t1", "test").with_input(&input);
+            let task = TaskInput::new("t1", "test").with_input(serde_json::from_str::<serde_json::Value>(&input).unwrap());
             let config = StepConfig::new("s1", "agent");
             let result = plugin.execute(task, config);
             assert!(
@@ -208,5 +226,40 @@ mod tests {
                 result.err()
             );
         }
+    }
+
+    #[test]
+    fn execute_agent_without_prefix_normalizes_to_bmad_slash() {
+        let plugin = BmadMethodPlugin;
+        let task = TaskInput::new("t1", "test")
+            .with_input(serde_json::json!({"agent": "architect", "prompt": "test normalization"}));
+        let config = StepConfig::new("s1", "agent");
+        let result = plugin.execute(task, config).unwrap();
+        let content: serde_json::Value =
+            serde_json::from_str(result.content.as_deref().unwrap()).unwrap();
+        assert_eq!(content["agent"].as_str().unwrap(), "bmad/architect");
+        assert_eq!(content["user_context"].as_str().unwrap(), "test normalization");
+    }
+
+    #[test]
+    fn execute_agent_with_prefix_still_works() {
+        let plugin = BmadMethodPlugin;
+        let task = TaskInput::new("t1", "test")
+            .with_input(serde_json::json!({"agent": "bmad/architect", "prompt": "test with prefix"}));
+        let config = StepConfig::new("s1", "agent");
+        let result = plugin.execute(task, config).unwrap();
+        let content: serde_json::Value =
+            serde_json::from_str(result.content.as_deref().unwrap()).unwrap();
+        assert_eq!(content["agent"].as_str().unwrap(), "bmad/architect");
+    }
+
+    #[test]
+    fn execute_empty_agent_name_returns_not_found() {
+        let plugin = BmadMethodPlugin;
+        let task = TaskInput::new("t1", "test")
+            .with_input(serde_json::json!({"agent": "", "prompt": "test"}));
+        let config = StepConfig::new("s1", "agent");
+        let err = plugin.execute(task, config).unwrap_err();
+        assert_eq!(err.code, "not_found");
     }
 }

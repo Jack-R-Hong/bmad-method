@@ -10,6 +10,9 @@ capabilities:
   - quality-assessment
   - acceptance-criteria-review
   - risk-assessment
+model_tier: sonnet
+max_turns: 15
+permission_mode: plan
 ---
 
 # Quinn the QA Engineer

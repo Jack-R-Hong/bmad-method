@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-03-17
-last_updated: 2026-03-20 (all v2 stories created, ready-for-dev)
+last_updated: 2026-03-20 (all v2 stories implemented, epics 5-9 done)
 project: bmad-method
 project_key: NOKEY
 tracking_system: file-system
@@ -79,38 +79,38 @@ development_status:
   epic-4-retrospective: optional
 
   # Epic 5: Code Hygiene - Dead Code, Redundancy, and Correctness Fixes
-  epic-5: backlog
-  5-1-remove-or-integrate-bmadconfig-dead-code: ready-for-dev
-  5-2-fix-verify-all-agents-valid-json-full-execute-path: ready-for-dev
-  5-3-consolidate-or-differentiate-agentmetadata-id-and-name: ready-for-dev
-  5-4-replace-allow-dead-code-with-proper-visibility: ready-for-dev
+  epic-5: done
+  5-1-remove-or-integrate-bmadconfig-dead-code: done
+  5-2-fix-verify-all-agents-valid-json-full-execute-path: done
+  5-3-consolidate-or-differentiate-agentmetadata-id-and-name: done
+  5-4-replace-allow-dead-code-with-proper-visibility: done
   epic-5-retrospective: optional
 
   # Epic 6: Generated Config Pipeline - Integrate suggested_config Into Code Generation
-  epic-6: backlog
-  6-1-extend-bmad-frontmatter-schema-with-config-fields: ready-for-dev
-  6-2-generate-suggested-config-function-in-agent-modules: ready-for-dev
-  6-3-remove-hardcoded-suggested-config-for-match-block: ready-for-dev
+  epic-6: done
+  6-1-extend-bmad-frontmatter-schema-with-config-fields: done
+  6-2-generate-suggested-config-function-in-agent-modules: done
+  6-3-remove-hardcoded-suggested-config-for-match-block: done
   epic-6-retrospective: optional
 
   # Epic 7: Input Validation & Security Hardening
-  epic-7: backlog
-  7-1-add-input-size-limit-to-extract-user-context: ready-for-dev
-  7-2-make-prompt-fallback-explicit-with-logging: ready-for-dev
-  7-3-document-bypasspermissions-rationale-for-dev-agent: ready-for-dev
-  7-4-document-input-sanitization-responsibility-boundary: ready-for-dev
+  epic-7: done
+  7-1-add-input-size-limit-to-extract-user-context: done
+  7-2-make-prompt-fallback-explicit-with-logging: done
+  7-3-document-bypasspermissions-rationale-for-dev-agent: done
+  7-4-document-input-sanitization-responsibility-boundary: done
   epic-7-retrospective: optional
 
   # Epic 8: Test Coverage Completeness
-  epic-8: backlog
-  8-1-extend-system-prompt-keyword-tests-to-all-12-agents: ready-for-dev
-  8-2-fix-system-prompt-non-empty-for-all-agents-test: ready-for-dev
-  8-3-add-tests-for-suggested-config-wildcard-fallback: ready-for-dev
-  8-4-add-suggested-config-validation-to-integration-tests: ready-for-dev
+  epic-8: done
+  8-1-extend-system-prompt-keyword-tests-to-all-12-agents: done
+  8-2-fix-system-prompt-non-empty-for-all-agents-test: done
+  8-3-add-tests-for-suggested-config-wildcard-fallback: done
+  8-4-add-suggested-config-validation-to-integration-tests: done
   epic-8-retrospective: optional
 
   # Epic 9: API Surface Evolution - Schema Versioning and Capabilities
-  epic-9: backlog
-  9-1-add-schema-version-field-to-bmadoutput: ready-for-dev
-  9-2-expose-agent-capabilities-in-bmadoutput: ready-for-dev
+  epic-9: done
+  9-1-add-schema-version-field-to-bmadoutput: done
+  9-2-expose-agent-capabilities-in-bmadoutput: done
   epic-9-retrospective: optional

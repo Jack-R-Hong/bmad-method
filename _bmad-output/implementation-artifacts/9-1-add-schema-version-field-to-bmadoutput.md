@@ -1,6 +1,6 @@
 # Story 9.1: Add schema_version Field to BmadOutput
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
