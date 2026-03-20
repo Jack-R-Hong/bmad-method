@@ -13,6 +13,16 @@ pub struct GenerationParams {
     pub max_tokens: Option<u32>,
 }
 
+/// Advisory configuration for downstream claude-code steps.
+/// These are suggestions — the workflow YAML config takes precedence if explicitly set.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SuggestedConfig {
+    pub model_tier: Option<String>,
+    pub max_turns: Option<u32>,
+    pub permission_mode: Option<String>,
+    pub allowed_tools: Option<Vec<String>>,
+}
+
 /// Structured output returned by a BMAD agent executor.
 /// Pulse owns LLM execution — this struct carries prompt data only.
 #[derive(Debug, Clone)]

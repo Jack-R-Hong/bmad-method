@@ -1,13 +1,10 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-#[cfg(not(feature = "pulse-api"))]
-use crate::pulse_api_stub::TaskExecutor;
-use bmad_types::{AgentMetadata, VerificationResult};
 #[cfg(test)]
-use bmad_types::{AgentOutput, BmadError};
-#[cfg(feature = "pulse-api")]
-use pulse_api::TaskExecutor;
+use bmad_types::BmadError;
+use bmad_types::{AgentMetadata, VerificationResult};
+use pulse_plugin_sdk::wit_types::{StepConfig, TaskInput};
 
 static GLOBAL_REGISTRY: OnceLock<AgentRegistry> = OnceLock::new();
 
@@ -19,28 +16,19 @@ pub fn list_agents() -> &'static [AgentMetadata] {
     global_registry().list_agents()
 }
 
-// Case-sensitive: "bmad/Architect" does NOT match "bmad/architect".
 pub fn find_agent(executor_name: &str) -> Option<&'static AgentMetadata> {
     global_registry().find_agent(executor_name)
 }
 
-/// Run a lightweight health check for every registered agent.
-///
-/// Each agent executor is constructed via [`BmadExecutor::for_agent`] and called with
-/// the sentinel input `"ping"`. `"ping"` is the shortest non-empty, non-whitespace
-/// string that satisfies `BmadExecutor::execute`'s non-empty-input contract; it carries
-/// no semantic meaning and will never be sent to a live LLM — it only exercises the
-/// plumbing (executor construction + routing) without any I/O.
-///
-/// This function never panics: all errors from `execute` are captured in
-/// [`VerificationResult::failure_reason`] with `passed = false`.
 pub fn verify_all_agents() -> Vec<VerificationResult> {
     let entries = crate::generated::all_agent_entries();
     entries
         .into_iter()
         .map(|(meta, prompt, params)| {
             let executor = crate::executor::BmadExecutor::for_agent(meta, prompt, params);
-            match executor.execute("ping") {
+            let task = TaskInput::new("health-check", "ping").with_input("ping");
+            let config = StepConfig::new("health-check", "agent");
+            match executor.execute(task, config) {
                 Ok(_) => VerificationResult {
                     executor_name: meta.executor_name.to_string(),
                     passed: true,
@@ -61,6 +49,12 @@ pub struct AgentRegistry {
     sorted: Vec<AgentMetadata>,
 }
 
+impl Default for AgentRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentRegistry {
     #[allow(dead_code)]
     pub fn new() -> Self {
@@ -70,7 +64,7 @@ impl AgentRegistry {
         for meta in &all {
             agents.insert(meta.executor_name, *meta);
         }
-        let mut sorted: Vec<AgentMetadata> = all.into_iter().map(|r| *r).collect();
+        let mut sorted: Vec<AgentMetadata> = all.into_iter().copied().collect();
         sorted.sort_by_key(|m| m.executor_name);
         Self { agents, sorted }
     }
@@ -90,23 +84,19 @@ impl AgentRegistry {
         self.agents.len()
     }
 
-    /// Test-only routing helper: verifies that dispatch finds the right agent and returns the
-    /// correct error variant for unknown/empty executor names.
-    ///
-    /// NOTE: The `system_prompt` field in the returned `AgentOutput` is intentionally set to
-    /// `meta.description` here because `AgentMetadata` does not carry the generated
-    /// `SYSTEM_PROMPT` constant — that constant lives in each `generated::{agent}` module.
-    /// This method exists purely to exercise routing logic in tests; production output uses
-    /// `BmadExecutor::execute()` which receives the correct `SYSTEM_PROMPT` via `for_agent()`.
     #[cfg(test)]
-    pub fn dispatch(&self, executor_name: &str, input: &str) -> Result<AgentOutput, BmadError> {
+    pub fn dispatch(
+        &self,
+        executor_name: &str,
+        input: &str,
+    ) -> Result<bmad_types::AgentOutput, BmadError> {
         if executor_name.trim().is_empty() {
             return Err(BmadError::InvalidInput(
                 "executor name cannot be empty".to_string(),
             ));
         }
         match self.find_agent(executor_name) {
-            Some(meta) => Ok(AgentOutput {
+            Some(meta) => Ok(bmad_types::AgentOutput {
                 system_prompt: meta.description.to_string(),
                 user_context: input.to_string(),
                 suggested_params: None,
@@ -239,7 +229,6 @@ mod tests {
 
     #[test]
     fn agent_count_matches_source_files() {
-        // Update EXPECTED_AGENT_COUNT when agents are added/removed from agents/.
         const EXPECTED_AGENT_COUNT: usize = 12;
         assert_eq!(
             list_agents().len(),
@@ -276,10 +265,6 @@ mod tests {
 
     #[test]
     fn no_duplicate_executor_names() {
-        // Check the raw generated list, NOT list_agents().
-        // AgentRegistry uses a HashMap which silently deduplicates by key, so checking
-        // list_agents() would never detect a duplicate — it's already been dropped.
-        // Checking all_agents() catches real duplicates at the source.
         let all = crate::generated::all_agents();
         let mut names: Vec<&str> = all.iter().map(|a| a.executor_name).collect();
         let original_len = names.len();

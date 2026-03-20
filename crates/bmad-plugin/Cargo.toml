@@ -9,16 +9,20 @@ name = "bmad_plugin"
 crate-type = ["cdylib", "rlib"]
 
 [[bin]]
-name = "print_api_version"
-path = "src/bin/print_api_version.rs"
+name = "bmad-method"
+path = "src/main.rs"
 
 [[bin]]
 name = "print_agent_count"
 path = "src/bin/print_agent_count.rs"
 
-[features]
-pulse-api = []
-
 [dependencies]
 bmad-types = { path = "../bmad-types" }
 thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+pulse-plugin-sdk = { path = "../../../../pulse/crates/pulse-plugin-sdk" }
+tracing = "0.1"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wit-bindgen = "0.53"

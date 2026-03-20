@@ -1,29 +1,65 @@
-// crates/bmad-plugin/src/executor.rs
-//
-// STUB INTERFACE (Story 2.1) — see docs/pulse-api-contract.md for verified real API
-// ==================================================================================
-// This file implements the BMAD-specific STUB TaskExecutor trait defined in
-// pulse_api_stub.rs.  The stub is intentionally simplified for self-contained
-// operation without a live Pulse binary.
-//
-// Stub trait signature (pulse_api_stub.rs):
-//   pub trait TaskExecutor: Send + Sync {
-//       fn executor_name(&self) -> &str;
-//       fn execute(&self, input: &str) -> Result<AgentOutput, BmadError>;
-//   }
-//
-// The REAL plugin-api trait was verified in Story 3.1 and differs significantly.
-// See docs/pulse-api-contract.md (Architecture Assumptions vs Reality table) for
-// the full comparison. Key differences are annotated with RECONCILED comments below.
-//
-// Activate real crate via `pulse-api` feature flag when available.
+use std::time::Instant;
 
-use bmad_types::{AgentMetadata, AgentOutput, BmadError, GenerationParams};
+use bmad_types::{AgentMetadata, GenerationParams, SuggestedConfig};
+use pulse_plugin_sdk::error::WitPluginError;
+use pulse_plugin_sdk::wit_types::{StepConfig, StepResult, TaskInput};
+use serde::{Deserialize, Serialize};
 
-#[cfg(not(feature = "pulse-api"))]
-use crate::pulse_api_stub::TaskExecutor;
-#[cfg(feature = "pulse-api")]
-use pulse_api::TaskExecutor;
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BmadInput {
+    pub agent: String,
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BmadOutputMetadata {
+    pub persona: String,
+    pub plugin_name: String,
+    pub plugin_version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BmadOutput {
+    pub agent: String,
+    pub system_prompt: String,
+    pub user_context: String,
+    pub suggested_params: Option<GenerationParams>,
+    pub suggested_config: Option<SuggestedConfig>,
+    pub metadata: BmadOutputMetadata,
+}
+
+fn suggested_config_for(executor_name: &str) -> Option<SuggestedConfig> {
+    let agent = executor_name.trim_start_matches("bmad/");
+    let cfg = match agent {
+        "architect" | "bmad-master" => SuggestedConfig {
+            model_tier: Some("opus".to_string()),
+            max_turns: Some(20),
+            permission_mode: Some("plan".to_string()),
+            allowed_tools: None,
+        },
+        "dev" | "developer" => SuggestedConfig {
+            model_tier: Some("sonnet".to_string()),
+            max_turns: Some(30),
+            permission_mode: Some("bypassPermissions".to_string()),
+            allowed_tools: None,
+        },
+        "qa" => SuggestedConfig {
+            model_tier: Some("sonnet".to_string()),
+            max_turns: Some(15),
+            permission_mode: Some("plan".to_string()),
+            allowed_tools: None,
+        },
+        _ => SuggestedConfig {
+            model_tier: Some("sonnet".to_string()),
+            max_turns: Some(20),
+            permission_mode: Some("plan".to_string()),
+            allowed_tools: None,
+        },
+    };
+    Some(cfg)
+}
 
 pub struct BmadExecutor {
     metadata: &'static AgentMetadata,
@@ -43,37 +79,63 @@ impl BmadExecutor {
             suggested_params,
         }
     }
-}
 
-impl TaskExecutor for BmadExecutor {
-    // RECONCILED: stub uses executor_name(); real plugin-api uses name() + version().
-    // When pulse-api feature is enabled, rename to name() and add version() returning
-    // the crate version string. See docs/pulse-api-contract.md for full details.
-    fn executor_name(&self) -> &str {
+    pub fn executor_name(&self) -> &str {
         self.metadata.executor_name
     }
 
-    // RECONCILED: stub uses fn execute(&str) -> Result<AgentOutput, BmadError> (sync).
-    // Real plugin-api uses async fn execute(&Task, &StepConfig) -> PluginResult<StepOutput>.
-    // When pulse-api feature is enabled: add async, accept Task+StepConfig, return StepOutput.
-    fn execute(&self, input: &str) -> Result<AgentOutput, BmadError> {
-        // No blocking I/O — all data is statically embedded (NFR2: <500ms overhead requirement)
-        if input.trim().is_empty() {
-            return Err(BmadError::InvalidInput("input cannot be empty".to_string()));
-        }
+    pub fn execute(
+        &self,
+        task: TaskInput,
+        config: StepConfig,
+    ) -> Result<StepResult, WitPluginError> {
+        let start = Instant::now();
+        let user_context = extract_user_context(&task)?;
 
-        Ok(AgentOutput {
+        let output = BmadOutput {
+            agent: self.metadata.executor_name.to_string(),
             system_prompt: self.system_prompt.to_string(),
-            user_context: input.to_string(),
+            user_context,
             suggested_params: self.suggested_params.clone(),
-        })
+            suggested_config: suggested_config_for(self.metadata.executor_name),
+            metadata: BmadOutputMetadata {
+                persona: self.metadata.name.to_string(),
+                plugin_name: "bmad-method".to_string(),
+                plugin_version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+        };
+
+        let content = serde_json::to_string(&output)
+            .map_err(|e| WitPluginError::internal(format!("output serialization failed: {e}")))?;
+
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        Ok(StepResult::success(config.step_id, elapsed_ms).with_content(content))
     }
+}
+
+fn extract_user_context(task: &TaskInput) -> Result<String, WitPluginError> {
+    let text = if let Some(input_str) = task.input.as_deref() {
+        if let Ok(bmad) = serde_json::from_str::<BmadInput>(input_str) {
+            bmad.prompt.unwrap_or_else(|| task.description.clone())
+        } else {
+            input_str.to_string()
+        }
+    } else {
+        task.description.clone()
+    };
+
+    if text.trim().is_empty() {
+        return Err(WitPluginError::invalid_input("input cannot be empty"));
+    }
+
+    Ok(text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::generated;
+    use pulse_plugin_sdk::wit_types::{StepConfig, TaskInput};
 
     static TEST_META: AgentMetadata = AgentMetadata {
         id: "test-agent",
@@ -86,23 +148,40 @@ mod tests {
 
     const TEST_SYSTEM_PROMPT: &str = "You are a test agent. Be thorough and precise.";
 
+    fn test_task(prompt: &str) -> TaskInput {
+        TaskInput::new("t-1", prompt).with_input(
+            &serde_json::json!({
+                "agent": TEST_META.executor_name,
+                "prompt": prompt
+            })
+            .to_string(),
+        )
+    }
+
+    fn test_config() -> StepConfig {
+        StepConfig::new("s-1", "agent")
+    }
+
+    fn parse_output(result: &StepResult) -> BmadOutput {
+        serde_json::from_str(result.content.as_deref().expect("content must be Some")).unwrap()
+    }
+
     #[test]
     fn executor_returns_output_for_valid_input() {
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let result = exec.execute("Review this design.");
+        let result = exec.execute(test_task("Review this design."), test_config());
         assert!(result.is_ok());
-        let Ok(output) = result else {
-            panic!("executor returned unexpected error")
-        };
-        assert!(!output.system_prompt.is_empty());
-        assert_eq!(output.user_context, "Review this design.");
+        let out = parse_output(result.as_ref().unwrap());
+        assert!(!out.system_prompt.is_empty());
+        assert_eq!(out.user_context, "Review this design.");
     }
 
     #[test]
     fn executor_returns_error_for_empty_input() {
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let result = exec.execute("   ");
-        assert!(matches!(result, Err(BmadError::InvalidInput(_))));
+        let task = TaskInput::new("t-1", "").with_input("   ");
+        let result = exec.execute(task, test_config());
+        assert!(matches!(result, Err(ref e) if e.code == "invalid_input"));
     }
 
     #[test]
@@ -114,11 +193,12 @@ mod tests {
     #[test]
     fn system_prompt_uses_constant_not_description() {
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let Ok(output) = exec.execute("do something") else {
-            panic!("executor returned unexpected error")
-        };
-        assert_eq!(output.system_prompt, TEST_SYSTEM_PROMPT);
-        assert_ne!(output.system_prompt, TEST_META.description);
+        let result = exec
+            .execute(test_task("do something"), test_config())
+            .unwrap();
+        let out = parse_output(&result);
+        assert_eq!(out.system_prompt, TEST_SYSTEM_PROMPT);
+        assert_ne!(out.system_prompt, TEST_META.description);
     }
 
     #[test]
@@ -129,11 +209,12 @@ mod tests {
             generated::architect::suggested_params(),
         );
         assert_eq!(exec.executor_name(), "bmad/architect");
-        let result = exec.execute("review the service mesh architecture");
+        let task = TaskInput::new("t-1", "review the service mesh architecture").with_input(
+            r#"{"agent": "bmad/architect", "prompt": "review the service mesh architecture"}"#,
+        );
+        let result = exec.execute(task, test_config());
         assert!(result.is_ok(), "Expected Ok from architect executor");
-        let Ok(out) = result else {
-            panic!("executor returned unexpected error")
-        };
+        let out = parse_output(result.as_ref().unwrap());
         assert!(
             out.system_prompt.len() > 100,
             "Expected full SYSTEM_PROMPT (>100 chars), got {} chars",
@@ -145,33 +226,31 @@ mod tests {
     #[test]
     fn execute_empty_string_returns_invalid_input() {
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let err = exec.execute("").expect_err("empty input must return Err");
-        match err {
-            BmadError::InvalidInput(ref msg) => {
-                assert_eq!(
-                    msg, "input cannot be empty",
-                    "AC3: exact error message must match"
-                );
-            }
-            other => panic!("expected InvalidInput, got: {:?}", other),
-        }
+        let task = TaskInput::new("t-1", "").with_input("");
+        let err = exec
+            .execute(task, test_config())
+            .expect_err("empty input must return Err");
+        assert_eq!(err.code, "invalid_input");
+        assert!(
+            err.message.contains("empty"),
+            "AC3: error message must contain 'empty', got: {}",
+            err.message
+        );
     }
 
     #[test]
     fn execute_whitespace_only_returns_invalid_input() {
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let task = TaskInput::new("t-1", "").with_input("   \t\n  ");
         let err = exec
-            .execute("   \t\n  ")
+            .execute(task, test_config())
             .expect_err("whitespace-only input must return Err");
-        match err {
-            BmadError::InvalidInput(ref msg) => {
-                assert_eq!(
-                    msg, "input cannot be empty",
-                    "AC3: whitespace-only must give same error message"
-                );
-            }
-            other => panic!("expected InvalidInput, got: {:?}", other),
-        }
+        assert_eq!(err.code, "invalid_input");
+        assert!(
+            err.message.contains("empty"),
+            "AC3: whitespace-only must give same error message, got: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -184,10 +263,9 @@ mod tests {
     fn user_context_preserved_verbatim() {
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
         let input = "Review this API design...";
-        let Ok(output) = exec.execute(input) else {
-            panic!("executor returned unexpected error")
-        };
-        assert_eq!(output.user_context, input);
+        let result = exec.execute(test_task(input), test_config()).unwrap();
+        let out = parse_output(&result);
+        assert_eq!(out.user_context, input);
     }
 
     #[test]
@@ -206,11 +284,18 @@ mod tests {
         ];
         for (meta, prompt) in agents {
             let exec = BmadExecutor::for_agent(meta, prompt, None);
-            let Ok(output) = exec.execute("test input") else {
-                panic!("unexpected error for agent {}", meta.name)
-            };
+            let task = TaskInput::new("t-1", "test input").with_input(
+                &serde_json::json!({
+                    "agent": meta.executor_name,
+                    "prompt": "test input"
+                })
+                .to_string(),
+            );
+            let result = exec.execute(task, test_config());
+            assert!(result.is_ok(), "unexpected error for agent {}", meta.name);
+            let out = parse_output(result.as_ref().unwrap());
             assert!(
-                !output.system_prompt.is_empty(),
+                !out.system_prompt.is_empty(),
                 "system_prompt must be non-empty for agent {}",
                 meta.name
             );
@@ -220,12 +305,14 @@ mod tests {
     #[test]
     fn two_outputs_from_same_executor_are_independent() {
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let Ok(out1) = exec.execute("first input") else {
-            panic!("unexpected error on first call")
-        };
-        let Ok(out2) = exec.execute("second input") else {
-            panic!("unexpected error on second call")
-        };
+        let r1 = exec
+            .execute(test_task("first input"), test_config())
+            .unwrap();
+        let r2 = exec
+            .execute(test_task("second input"), test_config())
+            .unwrap();
+        let out1 = parse_output(&r1);
+        let out2 = parse_output(&r2);
         assert_ne!(out1.user_context, out2.user_context);
         assert_eq!(out1.system_prompt, out2.system_prompt);
     }
@@ -233,12 +320,14 @@ mod tests {
     #[test]
     fn outputs_own_independent_strings() {
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let Ok(out1) = exec.execute("input alpha") else {
-            panic!("unexpected error")
-        };
-        let Ok(out2) = exec.execute("input beta") else {
-            panic!("unexpected error")
-        };
+        let r1 = exec
+            .execute(test_task("input alpha"), test_config())
+            .unwrap();
+        let r2 = exec
+            .execute(test_task("input beta"), test_config())
+            .unwrap();
+        let out1 = parse_output(&r1);
+        let out2 = parse_output(&r2);
         assert_eq!(out1.user_context, "input alpha");
         assert_eq!(out2.user_context, "input beta");
         assert_eq!(out1.system_prompt, out2.system_prompt);
@@ -253,10 +342,11 @@ mod tests {
             max_tokens: None,
         };
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, Some(params));
-        let Ok(output) = exec.execute("review this") else {
-            panic!("unexpected error")
-        };
-        let p = output
+        let result = exec
+            .execute(test_task("review this"), test_config())
+            .unwrap();
+        let out = parse_output(&result);
+        let p = out
             .suggested_params
             .expect("expected Some(GenerationParams)");
         assert!((p.temperature.unwrap() - 0.7).abs() < f32::EPSILON);
@@ -265,13 +355,12 @@ mod tests {
     #[test]
     fn suggested_params_none_when_not_specified() {
         let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
-        let Ok(output) = exec.execute("review this") else {
-            panic!("unexpected error")
-        };
-        assert!(output.suggested_params.is_none());
+        let result = exec
+            .execute(test_task("review this"), test_config())
+            .unwrap();
+        let out = parse_output(&result);
+        assert!(out.suggested_params.is_none());
     }
-
-    // ── Persona validation tests (Story 2.3 Task 6) ──────────────────────────
 
     #[test]
     fn architect_system_prompt_contains_persona_keywords() {
@@ -280,14 +369,15 @@ mod tests {
             generated::architect::SYSTEM_PROMPT,
             generated::architect::suggested_params(),
         );
-        let Ok(output) = exec.execute("test input") else {
-            panic!("architect executor returned unexpected error")
-        };
-        let prompt_lower = output.system_prompt.to_lowercase();
+        let task = TaskInput::new("t-1", "test input")
+            .with_input(r#"{"agent": "bmad/architect", "prompt": "test input"}"#);
+        let result = exec.execute(task, test_config()).unwrap();
+        let out = parse_output(&result);
+        let prompt_lower = out.system_prompt.to_lowercase();
         assert!(
             prompt_lower.contains("architect") || prompt_lower.contains("winston"),
             "Architect SYSTEM_PROMPT must contain 'architect' or 'winston', got: {}",
-            &output.system_prompt[..200.min(output.system_prompt.len())]
+            &out.system_prompt[..200.min(out.system_prompt.len())]
         );
     }
 
@@ -298,10 +388,11 @@ mod tests {
             generated::developer::SYSTEM_PROMPT,
             generated::developer::suggested_params(),
         );
-        let Ok(output) = exec.execute("test input") else {
-            panic!("developer executor returned unexpected error")
-        };
-        let prompt_lower = output.system_prompt.to_lowercase();
+        let task = TaskInput::new("t-1", "test input")
+            .with_input(r#"{"agent": "bmad/dev", "prompt": "test input"}"#);
+        let result = exec.execute(task, test_config()).unwrap();
+        let out = parse_output(&result);
+        let prompt_lower = out.system_prompt.to_lowercase();
         let has_keyword = prompt_lower.contains("concise")
             || prompt_lower.contains("precise")
             || prompt_lower.contains("implementation")
@@ -319,10 +410,11 @@ mod tests {
             generated::pm::SYSTEM_PROMPT,
             generated::pm::suggested_params(),
         );
-        let Ok(output) = exec.execute("test input") else {
-            panic!("pm executor returned unexpected error")
-        };
-        let prompt_lower = output.system_prompt.to_lowercase();
+        let task = TaskInput::new("t-1", "test input")
+            .with_input(r#"{"agent": "bmad/pm", "prompt": "test input"}"#);
+        let result = exec.execute(task, test_config()).unwrap();
+        let out = parse_output(&result);
+        let prompt_lower = out.system_prompt.to_lowercase();
         let has_keyword = prompt_lower.contains("why")
             || prompt_lower.contains("requirements")
             || prompt_lower.contains("user value")
@@ -340,10 +432,11 @@ mod tests {
             generated::qa::SYSTEM_PROMPT,
             generated::qa::suggested_params(),
         );
-        let Ok(output) = exec.execute("test input") else {
-            panic!("qa executor returned unexpected error")
-        };
-        let prompt_lower = output.system_prompt.to_lowercase();
+        let task = TaskInput::new("t-1", "test input")
+            .with_input(r#"{"agent": "bmad/qa", "prompt": "test input"}"#);
+        let result = exec.execute(task, test_config()).unwrap();
+        let out = parse_output(&result);
+        let prompt_lower = out.system_prompt.to_lowercase();
         let has_keyword = prompt_lower.contains("test")
             || prompt_lower.contains("quality")
             || prompt_lower.contains("verify")
@@ -352,5 +445,56 @@ mod tests {
             has_keyword,
             "QA SYSTEM_PROMPT must contain 'test', 'quality', 'verify', or 'ship'"
         );
+    }
+
+    #[test]
+    fn bmad_input_rejects_unknown_fields() {
+        let result = serde_json::from_str::<BmadInput>(
+            r#"{"agent": "bmad/architect", "prompt": "test", "typo": true}"#,
+        );
+        assert!(
+            result.is_err(),
+            "deny_unknown_fields must reject unknown keys in task input"
+        );
+    }
+
+    #[test]
+    fn metadata_plugin_name_is_bmad_method() {
+        let exec = BmadExecutor::for_agent(&TEST_META, TEST_SYSTEM_PROMPT, None);
+        let result = exec
+            .execute(test_task("check plugin name"), test_config())
+            .unwrap();
+        let out = parse_output(&result);
+        assert_eq!(out.metadata.plugin_name, "bmad-method");
+    }
+
+    #[test]
+    fn suggested_config_for_architect_is_opus() {
+        let cfg = suggested_config_for("bmad/architect").unwrap();
+        assert_eq!(cfg.model_tier.as_deref(), Some("opus"));
+        assert_eq!(cfg.max_turns, Some(20));
+        assert_eq!(cfg.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn suggested_config_for_bmad_master_is_opus() {
+        let cfg = suggested_config_for("bmad/bmad-master").unwrap();
+        assert_eq!(cfg.model_tier.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn suggested_config_for_dev_is_sonnet_bypass() {
+        let cfg = suggested_config_for("bmad/dev").unwrap();
+        assert_eq!(cfg.model_tier.as_deref(), Some("sonnet"));
+        assert_eq!(cfg.permission_mode.as_deref(), Some("bypassPermissions"));
+        assert_eq!(cfg.max_turns, Some(30));
+    }
+
+    #[test]
+    fn suggested_config_for_qa_is_sonnet_plan() {
+        let cfg = suggested_config_for("bmad/qa").unwrap();
+        assert_eq!(cfg.model_tier.as_deref(), Some("sonnet"));
+        assert_eq!(cfg.max_turns, Some(15));
+        assert_eq!(cfg.permission_mode.as_deref(), Some("plan"));
     }
 }

@@ -1,137 +1,111 @@
-use std::path::Path;
-use std::process::Command;
+use bmad_types::BmadError;
+use pulse_plugin_sdk::wit_types::{StepConfig, StepResult, TaskInput};
 
-use bmad_types::{AgentOutput, BmadError};
-
-// Replicates BmadExecutor::execute() using only pub bmad_plugin::generated,
-// avoiding the need to expose executor internals. Validates empty input, looks
-// up agent by executor_name, and constructs AgentOutput identical to production.
-fn execute_agent(agent_id: &str, input: &str) -> Result<AgentOutput, BmadError> {
-    if input.trim().is_empty() {
+fn execute_agent(agent_id: &str, prompt: &str) -> Result<StepResult, BmadError> {
+    if prompt.trim().is_empty() {
         return Err(BmadError::InvalidInput("input cannot be empty".to_string()));
     }
 
     let entries = bmad_plugin::generated::all_agent_entries();
-    match entries
-        .into_iter()
-        .find(|(meta, _, _)| meta.executor_name == agent_id)
+    if entries
+        .iter()
+        .all(|(meta, _, _)| meta.executor_name != agent_id)
     {
-        None => Err(BmadError::AgentNotFound(agent_id.to_string())),
-        Some((_meta, system_prompt, suggested_params)) => Ok(AgentOutput {
-            system_prompt: system_prompt.to_string(),
-            user_context: input.to_string(),
-            suggested_params,
-        }),
+        return Err(BmadError::AgentNotFound(agent_id.to_string()));
     }
+
+    let input = serde_json::json!({
+        "agent": agent_id,
+        "prompt": prompt
+    })
+    .to_string();
+
+    let plugin = bmad_plugin::BmadMethodPlugin::default();
+    let task = TaskInput::new("integration-test", prompt).with_input(&input);
+    let config = StepConfig::new("integration-step", "agent");
+
+    use pulse_plugin_sdk::wit_traits::StepExecutorPlugin as _;
+    plugin.execute(task, config).map_err(|e| {
+        if e.code == "not_found" {
+            BmadError::AgentNotFound(agent_id.to_string())
+        } else {
+            BmadError::InvalidInput(e.message)
+        }
+    })
 }
 
-fn plugin_path() -> std::path::PathBuf {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let target = manifest_dir.join("target").join("release");
-    if cfg!(target_os = "macos") {
-        target.join("libbmad_plugin.dylib")
-    } else {
-        target.join("libbmad_plugin.so")
-    }
-}
-
-#[test]
-fn plugin_exports_register_symbol() {
-    let path = plugin_path();
-    if !path.exists() {
-        eprintln!("Skipping: plugin binary not found at {:?}", path);
-        eprintln!("Run `cargo build -p bmad-plugin --release` first.");
-        return;
-    }
-
-    let output = Command::new("nm")
-        .arg("--dynamic")
-        .arg("--defined-only")
-        .arg(&path)
-        .output();
-
-    match output {
-        Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            assert!(
-                stdout.contains("pulse_plugin_register"),
-                "Plugin binary does not export 'pulse_plugin_register' symbol.\nnm output:\n{}",
-                stdout
-            );
-        }
-        Err(e) => {
-            eprintln!("nm not available ({}), trying objdump...", e);
-            let output2 = Command::new("objdump")
-                .arg("-T")
-                .arg(&path)
-                .output()
-                .expect("neither nm nor objdump available");
-            let stdout = String::from_utf8_lossy(&output2.stdout);
-            assert!(
-                stdout.contains("pulse_plugin_register"),
-                "Plugin binary does not export 'pulse_plugin_register' symbol.\nobjdump output:\n{}",
-                stdout
-            );
-        }
-    }
+fn parse_output(result: &StepResult) -> serde_json::Value {
+    serde_json::from_str(result.content.as_deref().expect("content must be present")).unwrap()
 }
 
 #[test]
 fn test_three_agent_sequential_workflow() {
-    // Simulates Pulse DAG chaining: previous step output becomes next step input
     let arch_input = "Design a REST API for user management with CRUD operations";
-    let arch_output =
+    let arch_result =
         execute_agent("bmad/architect", arch_input).expect("architect step should succeed");
+    let arch_out = parse_output(&arch_result);
 
     assert!(
-        !arch_output.system_prompt.is_empty(),
+        !arch_out["system_prompt"].as_str().unwrap_or("").is_empty(),
         "architect system_prompt must not be empty"
     );
     assert_eq!(
-        arch_output.user_context, arch_input,
+        arch_out["user_context"].as_str().unwrap(),
+        arch_input,
         "user_context must match input exactly"
     );
 
     let dev_input = format!(
         "{}\n\n---\nPrevious step output:\n{}",
-        "Implement the API designed in the previous step", arch_output.user_context
+        "Implement the API designed in the previous step",
+        arch_out["user_context"].as_str().unwrap()
     );
-    let dev_output = execute_agent("bmad/dev", &dev_input).expect("developer step should succeed");
+    let dev_result = execute_agent("bmad/dev", &dev_input).expect("developer step should succeed");
+    let dev_out = parse_output(&dev_result);
 
     assert!(
-        !dev_output.system_prompt.is_empty(),
+        !dev_out["system_prompt"].as_str().unwrap_or("").is_empty(),
         "developer system_prompt must not be empty"
     );
     assert_eq!(
-        dev_output.user_context, dev_input,
+        dev_out["user_context"].as_str().unwrap(),
+        dev_input,
         "user_context must match input exactly"
     );
 
     let qa_input = format!(
         "{}\n\n---\nPrevious step output:\n{}",
-        "Write test cases for the implementation in the previous step", dev_output.user_context
+        "Write test cases for the implementation in the previous step",
+        dev_out["user_context"].as_str().unwrap()
     );
-    let qa_output = execute_agent("bmad/qa", &qa_input).expect("QA step should succeed");
+    let qa_result = execute_agent("bmad/qa", &qa_input).expect("QA step should succeed");
+    let qa_out = parse_output(&qa_result);
 
     assert!(
-        !qa_output.system_prompt.is_empty(),
+        !qa_out["system_prompt"].as_str().unwrap_or("").is_empty(),
         "QA system_prompt must not be empty"
     );
     assert_eq!(
-        qa_output.user_context, qa_input,
+        qa_out["user_context"].as_str().unwrap(),
+        qa_input,
         "user_context must match input exactly"
     );
 
     assert_ne!(
-        arch_output.system_prompt, dev_output.system_prompt,
+        arch_out["system_prompt"].as_str().unwrap(),
+        dev_out["system_prompt"].as_str().unwrap(),
         "agents should have distinct system prompts"
     );
     assert_ne!(
-        dev_output.system_prompt, qa_output.system_prompt,
+        dev_out["system_prompt"].as_str().unwrap(),
+        qa_out["system_prompt"].as_str().unwrap(),
         "agents should have distinct system prompts"
     );
     assert!(
-        dev_output.user_context.contains(arch_input),
+        dev_out["user_context"]
+            .as_str()
+            .unwrap()
+            .contains(arch_input),
         "dev output must contain architect input (accumulated DAG context at step 2)"
     );
     assert!(
@@ -154,19 +128,34 @@ fn test_parallel_agents_no_shared_state() {
             .expect("qa parallel execution should succeed")
     });
 
-    let arch_output = handle_arch
+    let arch_result = handle_arch
         .join()
         .expect("architect thread should not panic");
-    let qa_output = handle_qa.join().expect("qa thread should not panic");
+    let qa_result = handle_qa.join().expect("qa thread should not panic");
 
-    assert_eq!(arch_output.user_context, "input_for_architect_thread");
-    assert_eq!(qa_output.user_context, "input_for_qa_thread");
+    let arch_out = parse_output(&arch_result);
+    let qa_out = parse_output(&qa_result);
+
+    assert_eq!(
+        arch_out["user_context"].as_str().unwrap(),
+        "input_for_architect_thread"
+    );
+    assert_eq!(
+        qa_out["user_context"].as_str().unwrap(),
+        "input_for_qa_thread"
+    );
     assert!(
-        !arch_output.user_context.contains("qa_thread"),
+        !arch_out["user_context"]
+            .as_str()
+            .unwrap()
+            .contains("qa_thread"),
         "architect output must not contain qa thread data"
     );
     assert!(
-        !qa_output.user_context.contains("architect_thread"),
+        !qa_out["user_context"]
+            .as_str()
+            .unwrap()
+            .contains("architect_thread"),
         "qa output must not contain architect thread data"
     );
 }
@@ -215,17 +204,21 @@ fn test_empty_input_error_is_descriptive() {
 
 #[test]
 fn test_execute_outputs_are_independent() {
-    let out1 = execute_agent("bmad/architect", "input_alpha").expect("first call should succeed");
-    let out2 = execute_agent("bmad/architect", "input_beta").expect("second call should succeed");
+    let r1 = execute_agent("bmad/architect", "input_alpha").expect("first call should succeed");
+    let r2 = execute_agent("bmad/architect", "input_beta").expect("second call should succeed");
+    let out1 = parse_output(&r1);
+    let out2 = parse_output(&r2);
 
-    assert_eq!(out1.user_context, "input_alpha");
-    assert_eq!(out2.user_context, "input_beta");
+    assert_eq!(out1["user_context"].as_str().unwrap(), "input_alpha");
+    assert_eq!(out2["user_context"].as_str().unwrap(), "input_beta");
     assert_eq!(
-        out1.system_prompt, out2.system_prompt,
+        out1["system_prompt"].as_str().unwrap(),
+        out2["system_prompt"].as_str().unwrap(),
         "system_prompt must be the same static content across calls"
     );
     assert_ne!(
-        out1.user_context, out2.user_context,
+        out1["user_context"].as_str().unwrap(),
+        out2["user_context"].as_str().unwrap(),
         "outputs with different inputs must differ"
     );
 }

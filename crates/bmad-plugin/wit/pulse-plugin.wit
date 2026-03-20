@@ -1,0 +1,173 @@
+package pulse:plugin@0.1.0;
+
+// --- Host API (imported by plugins) ---
+
+interface workflow-types {
+    record workflow-info {
+        workflow-id: string,
+        name: string,
+        version: string,
+        description: option<string>,
+    }
+    record step-definition {
+        step-id: string,
+        step-type: string,
+        depends-on: list<string>,
+        context-from: list<string>,
+        timeout-secs: option<u32>,
+    }
+    record workflow-context {
+        workflow: workflow-info,
+        steps: list<step-definition>,
+        current-step-id: string,
+        execution-state: execution-state,
+        completed-steps: list<step-status>,
+    }
+    enum execution-state { pending, running, paused, completed, failed }
+    record step-status {
+        step-id: string,
+        state: execution-state,
+        output: option<string>,
+        error: option<string>,
+        execution-time-ms: option<u64>,
+    }
+}
+
+interface host-api {
+    use workflow-types.{workflow-context, workflow-info};
+
+    enum log-level { debug, info, warn, error }
+    log: func(level: log-level, msg: string);
+    get-config: func(key: string) -> option<string>;
+    kv-get: func(key: string) -> option<list<u8>>;
+    kv-set: func(key: string, value: list<u8>);
+
+    record task-context {
+        task-id: string,
+        workflow-id: string,
+        step-id: string,
+        metadata: list<tuple<string, string>>,
+    }
+    get-task-context: func() -> task-context;
+    get-workflow-context: func() -> workflow-context;
+    list-workflows: func() -> list<workflow-info>;
+
+    /// Outbound HTTP request configuration for Pattern B plugins.
+    /// WASM plugins have NO direct network access; all HTTP goes through this host function.
+    record http-request-config {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: option<list<u8>>,
+        timeout-ms: option<u32>,
+    }
+
+    /// HTTP response returned by the host after executing the request.
+    record http-response {
+        status-code: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    /// Execute an outbound HTTP request through the host.
+    /// The host enforces a per-plugin allowed-domains security policy.
+    /// Returns an error string in canonical JSON format on failure:
+    /// `{"code": "...", "message": "..."}`
+    http-request: func(config: http-request-config) -> result<http-response, string>;
+}
+
+// --- Plugin lifecycle (exported by all plugins) ---
+
+interface plugin-lifecycle {
+    record plugin-dependency {
+        name: string,
+        version-req: string,
+        optional: bool,
+    }
+    record plugin-info {
+        name: string,
+        version: string,
+        description: option<string>,
+        dependencies: list<plugin-dependency>,
+    }
+    get-info: func() -> plugin-info;
+    health-check: func() -> bool;
+}
+
+// --- Capability interfaces (one per trait) ---
+
+interface quality-check {
+    record step-output { step-id: string, content: option<string>, metadata: list<tuple<string, string>> }
+    record check-result { passed: bool, score: f64, message: option<string> }
+    check: func(output: step-output) -> result<check-result, string>;
+}
+
+interface step-executor {
+    record task-input { task-id: string, description: string, input: option<string>, metadata: list<tuple<string, string>> }
+    record step-config { step-id: string, step-type: string, timeout-secs: option<u32> }
+    record step-result { step-id: string, status: string, content: option<string>, execution-time-ms: u64 }
+    execute: func(task: task-input, config: step-config) -> result<step-result, string>;
+}
+
+interface triage-engine {
+    record task-metadata { task-id: string, description: string, priority: u32, category: option<string> }
+    record triage-result { category: string, confidence: f64, recommended-priority: u32, reasoning: option<string> }
+    classify: func(task: task-metadata) -> result<triage-result, string>;
+}
+
+interface routing-engine {
+    record routing-policy { name: string, cost-weight: f64, quality-weight: f64, speed-weight: f64 }
+    record model-selection { model-name: string, provider: string, confidence: f64, reasoning: option<string> }
+    use triage-engine.{task-metadata};
+    select-model: func(task: task-metadata, policy: routing-policy) -> result<model-selection, string>;
+}
+
+interface notify-channel {
+    record notification { id: string, level: string, title: string, message: string, recipients: list<string> }
+    record notify-result { success: bool, recipients-notified: u32, error-message: option<string> }
+    send: func(notification: notification) -> result<notify-result, string>;
+}
+
+interface trigger-source {
+    use workflow-types.{workflow-info};
+
+    record subscription-config { subscription-id: string, event-types: list<string>, filters: list<tuple<string, string>> }
+    record trigger-event { event-id: string, event-type: string, source: string, timestamp: u64, payload: string, metadata: list<tuple<string, string>> }
+    subscribe: func(config: subscription-config) -> result<string, string>;
+    poll-events: func() -> result<list<trigger-event>, string>;
+    unsubscribe: func(subscription-id: string) -> result<_, string>;
+}
+
+// --- Composable worlds ---
+
+world pulse-plugin-core {
+    import host-api;
+    import workflow-types;
+    export plugin-lifecycle;
+}
+
+world quality-check-plugin   { include pulse-plugin-core; export quality-check; }
+world step-executor-plugin   { include pulse-plugin-core; export step-executor; }
+world triage-plugin          { include pulse-plugin-core; export triage-engine; }
+world routing-plugin         { include pulse-plugin-core; export routing-engine; }
+world notify-plugin          { include pulse-plugin-core; export notify-channel; }
+world trigger-plugin         { include pulse-plugin-core; export trigger-source; }
+
+interface dashboard-extension {
+    get-pages-json: func() -> string;
+    get-api-routes-json: func() -> string;
+    get-display-customizations-json: func() -> string;
+}
+
+world dashboard-extension-plugin { include pulse-plugin-core; export dashboard-extension; }
+
+world full-plugin {
+    include pulse-plugin-core;
+    export quality-check;
+    export step-executor;
+    export triage-engine;
+    export routing-engine;
+    export notify-channel;
+    export trigger-source;
+    export dashboard-extension;
+}
