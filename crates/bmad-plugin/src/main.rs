@@ -5,7 +5,7 @@ use bmad_plugin::BmadMethodPlugin;
 #[cfg(not(target_arch = "wasm32"))]
 fn main() {
     let plugin = BmadMethodPlugin;
-    pulse_plugin_sdk::dev_adapter::DevAdapter::new(plugin).serve_stdio();
+    pulse_plugin_sdk::dev_adapter::DevAdapterWithStepExecutor::new(plugin).serve_stdio();
 }
 
 #[cfg(target_arch = "wasm32")]
